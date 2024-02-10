@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 )
 
 type Job func(downloader *Downloader)
@@ -18,10 +19,20 @@ type Downloader struct {
 
 type Resource struct {
 	url           string
+	status        ResourceStatus
 	contentLength int // in bytes
 	destPath      string
 	isAcceptRange bool
 }
+
+type ResourceStatus int // 0: not started, 1: downloading, 2: downloaded, 3: failed
+const (
+	AVAILABLE ResourceStatus = iota
+	DOWNLOADING
+	DOWNLOADED
+	NOT_AVAILABLE
+	CONNECTION_ERROR
+)
 
 func readFileByLine(path string) []string {
 	dat, err := os.ReadFile(path)
@@ -29,12 +40,19 @@ func readFileByLine(path string) []string {
 		panic(err)
 	}
 
-	return strings.Split(string(dat), "\n")
+	var rtn []string
+	for _, str := range strings.Split(string(dat), "\n") {
+		if str != "" {
+			rtn = append(rtn, str)
+		}
+	}
+
+	return rtn
 }
 
 func constructDownloadersFromIpList(ipList []string, numOfConn int) []Downloader {
 	if len(ipList) == 0 || numOfConn <= 0 {
-		panic("Invalid input")
+		panic("No proxy server or invalid number of connections provided")
 	}
 
 	var downloaders []Downloader
@@ -62,6 +80,7 @@ func constructDownloaderFromIp(ip string) Downloader {
 
 	client := &http.Client{}
 	client.Transport = transport
+	client.Timeout = time.Second * 2
 
 	return Downloader{client: client}
 }
@@ -71,8 +90,11 @@ func constructResources(downloaders []Downloader, urlList []string) []Resource {
 
 	jobs := make([]Job, len(urlList))
 	for i, url := range urlList {
+		handleI := i
+		handleUrl := url
 		jobs[i] = func(downloader *Downloader) {
-			resources[i] = constructResourceFromURL(downloader, url)
+			// fmt.Println("Downloading", handleUrl, handleI)
+			resources[handleI] = constructResourceFromURL(downloader, handleUrl)
 		}
 	}
 
@@ -82,7 +104,41 @@ func constructResources(downloaders []Downloader, urlList []string) []Resource {
 }
 
 func constructResourceFromURL(downloader *Downloader, url string) Resource {
-	return Resource{url: url}
+	client := downloader.client
+	req, err := http.NewRequest("HEAD", url, nil)
+
+	if err != nil {
+		panic(err)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		errReason := err.Error()
+		if strings.HasSuffix(errReason, "context deadline exceeded (Client.Timeout exceeded while awaiting headers)") {
+			return Resource{
+				url:           url,
+				status:        CONNECTION_ERROR,
+				contentLength: 0,
+				isAcceptRange: false}
+		}
+		panic(err)
+	}
+
+	defer resp.Body.Close()
+
+	if resp.StatusCode == 200 {
+		return Resource{
+			url:           url,
+			status:        AVAILABLE,
+			contentLength: int(resp.ContentLength),
+			isAcceptRange: resp.Header.Get("Accept-Ranges") == "bytes"}
+	} else {
+		return Resource{
+			url:           url,
+			status:        NOT_AVAILABLE,
+			contentLength: 0,
+			isAcceptRange: false}
+	}
 }
 
 func consumeJobs(downloaders []Downloader, jobs []Job) {
@@ -101,7 +157,8 @@ func consumeJobs(downloaders []Downloader, jobs []Job) {
 
 	jobsQueue := make(chan *Job, len(jobs))
 	for _, job := range jobs {
-		jobsQueue <- &job
+		putJob := job
+		jobsQueue <- &putJob
 	}
 
 	for {
