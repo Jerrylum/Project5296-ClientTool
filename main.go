@@ -22,23 +22,138 @@ type UserRequest struct {
 	dest string
 }
 
-type Resource struct {
+type ResourceRequest struct {
 	url           string
-	destPath      string
-	status        ResourceStatus
-	contentLength int // in bytes
+	dest          string
+	contentLength uint64 // in bytes
 	isAcceptRange bool
+	status        ResourceRequestStatus
 }
 
-type ResourceStatus int // 0: not started, 1: downloading, 2: downloaded, 3: failed
+type ResourceRequestStatus int
+
 const (
-	AVAILABLE ResourceStatus = iota
-	DOWNLOADING
-	DOWNLOADED
-	NOT_AVAILABLE
+	AVAILABLE ResourceRequestStatus = iota
+	NOT_FOUND
 	CONNECTION_TIMEOUT
 	CONNECTION_REFUSED
 )
+
+type DownloadStatus int
+
+type Resource struct {
+	url              string
+	dest             string
+	contentLength    uint64 // in bytes
+	isAcceptRange    bool
+	_fd              *os.File
+	_segments        []ResourceSegment
+	_writtenSegments []ResourceSegment
+}
+
+type ResourceSegment struct {
+	resource *Resource
+	from     uint64 // inclusive
+	to       uint64 // exclusive
+	_status  DownloadStatus
+}
+
+const (
+	PENDING DownloadStatus = iota
+	DOWNLOADING
+	DOWNLOADED
+)
+
+func (r *Resource) AddSegment(from uint64, to uint64) {
+	r._segments = append(r._segments, ResourceSegment{resource: r, from: from, to: to, _status: PENDING})
+}
+
+func (r *Resource) OpenFile() error {
+	if r._fd != nil {
+		return nil
+	}
+
+	f, err := os.OpenFile(r.dest, os.O_RDWR|os.O_CREATE, 0600)
+	if err != nil {
+		return err
+	}
+
+	r._fd = f
+	return nil
+}
+
+func (r *Resource) CloseFile() error {
+	if r._fd == nil {
+		return nil
+	}
+
+	err := r._fd.Close()
+	if err != nil {
+		return err
+	}
+
+	r._fd = nil
+	return nil
+}
+
+func (r *Resource) Status() DownloadStatus {
+	if len(r._segments) == 0 {
+		return DOWNLOADED
+	}
+
+	for _, seg := range r._segments {
+		if seg._status == DOWNLOADING {
+			return DOWNLOADING
+		}
+	}
+
+	return PENDING
+}
+
+func (r *Resource) WriteAt(b []byte, off int64) (n int, err error) {
+	if r._fd == nil {
+		return 0, fmt.Errorf("The file is not opened")
+	}
+	return r._fd.WriteAt(b, off)
+}
+
+func (rs *ResourceSegment) Status() DownloadStatus {
+	return rs._status
+}
+
+func (rs *ResourceSegment) StartDownload() {
+	if rs._status != PENDING {
+		panic("The segment is not pending")
+	}
+	rs._status = DOWNLOADING
+
+	if err := rs.resource.OpenFile(); err != nil {
+		panic(err)
+	}
+}
+
+func (rs *ResourceSegment) FinishDownload() {
+	if rs._status != DOWNLOADING {
+		panic("The segment is not downloading")
+	}
+	rs._status = DOWNLOADED
+
+	// remove from _segments in resource
+	for i, seg := range rs.resource._segments {
+		if seg == *rs {
+			rs.resource._segments = append(rs.resource._segments[:i], rs.resource._segments[i+1:]...)
+			break
+		}
+	}
+
+	// append to _writtenSegments in resource
+	rs.resource._writtenSegments = append(rs.resource._writtenSegments, *rs)
+
+	// if all segments are downloaded, close the file
+	if len(rs.resource._segments) == 0 {
+		rs.resource.CloseFile()
+	}
+}
 
 func ReadFileByLine(path string) []string {
 	dat, err := os.ReadFile(path)
@@ -135,25 +250,25 @@ func ConstructDownloaderFromIp(ip string) Downloader {
 	return Downloader{client: client}
 }
 
-func ConstructResources(downloaders []Downloader, requestList []UserRequest) []Resource {
-	resources := make([]Resource, len(requestList))
+func ConstructResourceRequests(downloaders []Downloader, userRequestList []UserRequest) []ResourceRequest {
+	resourceRequests := make([]ResourceRequest, len(userRequestList))
 
-	jobs := make([]func(worker *Downloader), len(requestList))
-	for i, request := range requestList {
+	jobs := make([]func(worker *Downloader), len(userRequestList))
+	for i, request := range userRequestList {
 		handleI := i
 		handleRequest := request
 		jobs[i] = func(downloader *Downloader) {
 			// fmt.Println("Downloading", handleUrl, handleI)
-			resources[handleI] = ConstructResourceFromURL(downloader, handleRequest)
+			resourceRequests[handleI] = ConstructResourceRequestFromUserRequest(downloader, handleRequest)
 		}
 	}
 
 	ConsumeJobs(downloaders, jobs)
 
-	return resources
+	return resourceRequests
 }
 
-func ConstructResourceFromURL(downloader *Downloader, request UserRequest) Resource {
+func ConstructResourceRequestFromUserRequest(downloader *Downloader, request UserRequest) ResourceRequest {
 	client := downloader.client
 	req, err := http.NewRequest("HEAD", request.url, nil)
 
@@ -165,17 +280,17 @@ func ConstructResourceFromURL(downloader *Downloader, request UserRequest) Resou
 	if err != nil {
 		errReason := err.Error()
 		if strings.HasSuffix(errReason, "context deadline exceeded (Client.Timeout exceeded while awaiting headers)") {
-			return Resource{
+			return ResourceRequest{
 				url:           request.url,
-				destPath:      request.dest,
+				dest:          request.dest,
 				status:        CONNECTION_TIMEOUT,
 				contentLength: 0,
 				isAcceptRange: false}
 		}
 		if strings.HasSuffix(errReason, "connect: connection refused") {
-			return Resource{
+			return ResourceRequest{
 				url:           request.url,
-				destPath:      request.dest,
+				dest:          request.dest,
 				status:        CONNECTION_REFUSED,
 				contentLength: 0,
 				isAcceptRange: false}
@@ -186,17 +301,17 @@ func ConstructResourceFromURL(downloader *Downloader, request UserRequest) Resou
 	defer resp.Body.Close()
 
 	if resp.StatusCode == 200 {
-		return Resource{
+		return ResourceRequest{
 			url:           request.url,
-			destPath:      request.dest,
+			dest:          request.dest,
 			status:        AVAILABLE,
-			contentLength: int(resp.ContentLength),
+			contentLength: uint64(resp.ContentLength), // XXX: validate the data
 			isAcceptRange: resp.Header.Get("Accept-Ranges") == "bytes"}
 	} else {
-		return Resource{
+		return ResourceRequest{
 			url:           request.url,
-			destPath:      request.dest,
-			status:        NOT_AVAILABLE,
+			dest:          request.dest,
+			status:        NOT_FOUND,
 			contentLength: 0,
 			isAcceptRange: false}
 	}
@@ -242,7 +357,7 @@ func ConsumeJobs[T any](workers []T, jobs []func(worker *T)) {
 	}
 }
 
-func DownloadResources(downloaders []Downloader, resources []Resource) {
+func DownloadResources(downloaders []Downloader, requests []ResourceRequest) {
 	// check := make(chan bool)
 	// started := 0
 
@@ -251,8 +366,37 @@ func DownloadResources(downloaders []Downloader, resources []Resource) {
 		isWorking bool
 	}
 
-	type ResourceSegment struct {
-		resource *Resource
+	/////////////////////////
+	/// Calculate the total size of the requests
+	/////////////////////////
+
+	totalSize := uint64(0) // in bytes
+	for _, request := range requests {
+		totalSize += request.contentLength
+	}
+
+	chunkSize := totalSize / uint64(len(downloaders))
+
+	/////////////////////////
+	/// Create resources and split them into segments
+	/////////////////////////
+
+	var resources []Resource
+	for _, request := range requests {
+		resource := Resource{
+			url:              request.url,
+			dest:             request.dest,
+			contentLength:    request.contentLength,
+			isAcceptRange:    request.isAcceptRange,
+			_fd:              nil,
+			_segments:        []ResourceSegment{},
+			_writtenSegments: []ResourceSegment{}}
+		for idx := uint64(0); idx < request.contentLength; {
+			maxChunkSize := min(request.contentLength, idx+chunkSize)
+			resource.AddSegment(idx, maxChunkSize)
+			idx += maxChunkSize
+		}
+		resources = append(resources, resource)
 	}
 }
 
@@ -304,9 +448,16 @@ Each line can be one of the following formats:
 
 	numOfConn := *numOfConnRaw
 	downloaders := ConstructDownloadersFromIpList(proxyList, numOfConn)
-	resources := ConstructResources(downloaders, requestList)
+	rrs := ConstructResourceRequests(downloaders, requestList)
 
-	fmt.Println(resources)
+	availableRR := []ResourceRequest{}
+	for _, rr := range rrs {
+		if rr.status == AVAILABLE {
+			availableRR = append(availableRR, rr)
+		}
+	}
+
+	fmt.Println(availableRR)
 
 	// f, err := os.OpenFile("/home/ubuntu/client/output", os.O_RDWR|os.O_CREATE, 0600)
 	// if err != nil {
