@@ -9,6 +9,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -64,8 +65,10 @@ const (
 	DOWNLOADED
 )
 
-func (r *Resource) AddSegment(from uint64, to uint64) {
-	r._segments = append(r._segments, ResourceSegment{resource: r, from: from, to: to, _status: PENDING})
+func (r *Resource) AddSegment(from uint64, to uint64) ResourceSegment {
+	segment := ResourceSegment{resource: r, from: from, to: to, _status: PENDING}
+	r._segments = append(r._segments, segment)
+	return segment
 }
 
 func (r *Resource) OpenFile() error {
@@ -115,6 +118,17 @@ func (r *Resource) WriteAt(b []byte, off int64) (n int, err error) {
 		return 0, fmt.Errorf("The file is not opened")
 	}
 	return r._fd.WriteAt(b, off)
+}
+
+func (rs *ResourceSegment) WriteAt(b []byte, off int64) (n int, err error) {
+	if rs._status != DOWNLOADING {
+		return 0, fmt.Errorf("The segment is not downloading")
+	}
+	return rs.resource.WriteAt(b, off)
+}
+
+func (rs *ResourceSegment) ContentLength() uint64 {
+	return rs.to - rs.from
 }
 
 func (rs *ResourceSegment) Status() DownloadStatus {
@@ -358,14 +372,6 @@ func ConsumeJobs[T any](workers []T, jobs []func(worker *T)) {
 }
 
 func DownloadResources(downloaders []Downloader, requests []ResourceRequest) {
-	// check := make(chan bool)
-	// started := 0
-
-	type LiveDownloader struct {
-		entity    *Downloader
-		isWorking bool
-	}
-
 	/////////////////////////
 	/// Calculate the total size of the requests
 	/////////////////////////
@@ -382,6 +388,7 @@ func DownloadResources(downloaders []Downloader, requests []ResourceRequest) {
 	/////////////////////////
 
 	var resources []Resource
+	var segments []ResourceSegment
 	for _, request := range requests {
 		resource := Resource{
 			url:              request.url,
@@ -391,13 +398,78 @@ func DownloadResources(downloaders []Downloader, requests []ResourceRequest) {
 			_fd:              nil,
 			_segments:        []ResourceSegment{},
 			_writtenSegments: []ResourceSegment{}}
-		for idx := uint64(0); idx < request.contentLength; {
-			maxChunkSize := min(request.contentLength, idx+chunkSize)
-			resource.AddSegment(idx, maxChunkSize)
-			idx += maxChunkSize
-		}
 		resources = append(resources, resource)
+
+		if request.isAcceptRange {
+			for idx := uint64(0); idx < request.contentLength; {
+				maxChunkSize := min(request.contentLength, idx+chunkSize)
+				segment := resource.AddSegment(idx, maxChunkSize)
+				segments = append(segments, segment)
+				idx += maxChunkSize
+			}
+		} else {
+			segment := resource.AddSegment(0, request.contentLength)
+			segments = append(segments, segment)
+
+		}
 	}
+
+	/////////////////////////
+	/// Sort the segments by the size from largest to smallest
+	/////////////////////////
+
+	// We want to download the largest segments first to better balance the load among the downloaders
+	sort.Slice(segments, func(i, j int) bool {
+		return segments[i].ContentLength() > segments[j].ContentLength()
+	})
+
+	/////////////////////////
+	/// Consume the segments
+	/////////////////////////
+
+	check := make(chan bool)
+	started := 0
+
+	type LiveDownloader struct {
+		entity    *Downloader
+		isWorking bool
+	}
+
+	liveDownloaders := make([]LiveDownloader, len(downloaders))
+	for i, downloader := range downloaders {
+		liveDownloaders[i] = LiveDownloader{entity: &downloader, isWorking: false}
+	}
+
+	pendingQueue := make(chan *ResourceSegment, len(segments))
+	for _, seg := range segments {
+		putSeg := seg
+		pendingQueue <- &putSeg
+	}
+
+	for {
+		for _, ld := range liveDownloaders {
+			if !ld.isWorking {
+				go func(ld2 *LiveDownloader) {
+					ld2.isWorking = true
+					seg := <-pendingQueue
+					seg.StartDownload()
+					started++
+					check <- true
+					// TODO
+					seg.FinishDownload()
+					ld2.isWorking = false
+				}(&ld)
+			}
+		}
+
+		<-check
+		if started == len(segments) {
+			break
+		}
+	}
+
+	/////////////////////////
+	/// TODO
 }
 
 func main() {
