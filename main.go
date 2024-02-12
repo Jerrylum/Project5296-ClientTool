@@ -13,8 +13,6 @@ import (
 	"time"
 )
 
-type Job func(downloader *Downloader)
-
 type Downloader struct {
 	client *http.Client
 }
@@ -140,7 +138,7 @@ func ConstructDownloaderFromIp(ip string) Downloader {
 func ConstructResources(downloaders []Downloader, requestList []UserRequest) []Resource {
 	resources := make([]Resource, len(requestList))
 
-	jobs := make([]Job, len(requestList))
+	jobs := make([]func(worker *Downloader), len(requestList))
 	for i, request := range requestList {
 		handleI := i
 		handleRequest := request
@@ -204,21 +202,21 @@ func ConstructResourceFromURL(downloader *Downloader, request UserRequest) Resou
 	}
 }
 
-func ConsumeJobs(downloaders []Downloader, jobs []Job) {
+func ConsumeJobs[T any](workers []T, jobs []func(worker *T)) {
 	check := make(chan bool)
 	consumed := 0
 
-	type LiveDownloader struct {
-		entity    *Downloader
+	type LiveWorker struct {
+		entity    *T
 		isWorking bool
 	}
 
-	liveDownloaders := make([]LiveDownloader, len(downloaders))
-	for i, downloader := range downloaders {
-		liveDownloaders[i] = LiveDownloader{entity: &downloader, isWorking: false}
+	liveDownloaders := make([]LiveWorker, len(workers))
+	for i, downloader := range workers {
+		liveDownloaders[i] = LiveWorker{entity: &downloader, isWorking: false}
 	}
 
-	jobsQueue := make(chan *Job, len(jobs))
+	jobsQueue := make(chan *func(worker *T), len(jobs))
 	for _, job := range jobs {
 		putJob := job
 		jobsQueue <- &putJob
@@ -227,7 +225,7 @@ func ConsumeJobs(downloaders []Downloader, jobs []Job) {
 	for {
 		for _, ld := range liveDownloaders {
 			if !ld.isWorking {
-				go func(ld2 *LiveDownloader) {
+				go func(ld2 *LiveWorker) {
 					ld2.isWorking = true
 					(*<-jobsQueue)(ld2.entity)
 					ld2.isWorking = false
@@ -245,7 +243,17 @@ func ConsumeJobs(downloaders []Downloader, jobs []Job) {
 }
 
 func DownloadResources(downloaders []Downloader, resources []Resource) {
+	// check := make(chan bool)
+	// started := 0
 
+	type LiveDownloader struct {
+		entity    *Downloader
+		isWorking bool
+	}
+
+	type ResourceSegment struct {
+		resource *Resource
+	}
 }
 
 func main() {
@@ -299,5 +307,17 @@ Each line can be one of the following formats:
 	resources := ConstructResources(downloaders, requestList)
 
 	fmt.Println(resources)
+
+	// f, err := os.OpenFile("/home/ubuntu/client/output", os.O_RDWR|os.O_CREATE, 0600)
+	// if err != nil {
+	// 	panic(err)
+	// }
+
+	// // string to bytes
+	// b := []byte("hello world     ") // 16 bytes
+	// // f.Write(b)
+	// f.WriteAt(b, 1024*1024*1024)
+
+	// defer f.Close()
 
 }
