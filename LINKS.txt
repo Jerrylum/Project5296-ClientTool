@@ -1,2 +1,3 @@
 http://16.163.217.155/download/200.jpg
-http://16.163.217.155/download/200.jpg > 200_1.png
+http://16.163.217.155/download/200.jpg > 200_1.jpg
+http://16.163.217.155/download/200.jpg > /home/ubuntu/client/200_2.jpg

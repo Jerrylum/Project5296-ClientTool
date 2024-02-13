@@ -4,6 +4,8 @@ import (
 	"crypto/tls"
 	"flag"
 	"fmt"
+	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -40,7 +42,7 @@ const (
 	CONNECTION_REFUSED
 )
 
-type DownloadStatus int
+type ResourceStatus int
 
 type Resource struct {
 	url              string
@@ -56,17 +58,19 @@ type ResourceSegment struct {
 	resource *Resource
 	from     uint64 // inclusive
 	to       uint64 // exclusive
-	_status  DownloadStatus
+	attempts uint8
+	_status  ResourceStatus
 }
 
 const (
-	PENDING DownloadStatus = iota
+	PENDING ResourceStatus = iota
 	DOWNLOADING
 	DOWNLOADED
+	DOWNLOAD_FAILED
 )
 
 func (r *Resource) AddSegment(from uint64, to uint64) ResourceSegment {
-	segment := ResourceSegment{resource: r, from: from, to: to, _status: PENDING}
+	segment := ResourceSegment{resource: r, from: from, to: to, attempts: 3, _status: PENDING}
 	r._segments = append(r._segments, segment)
 	return segment
 }
@@ -99,18 +103,37 @@ func (r *Resource) CloseFile() error {
 	return nil
 }
 
-func (r *Resource) Status() DownloadStatus {
-	if len(r._segments) == 0 {
-		return DOWNLOADED
-	}
-
+/*
+PENDING: All segments are pending
+DOWNLOADING: At least one segment is downloading
+DOWNLOADED: All segments are downloaded successfully
+DOWNLOAD_FAILED: No segments are downloading/pending and at least one segment is downloaded unsuccessfully
+*/
+func (r *Resource) Status() ResourceStatus {
+	// if all segments are pending
+	isAllPending := true
+	isAllDownloaded := true
 	for _, seg := range r._segments {
+		if seg._status != PENDING {
+			isAllPending = false
+		}
 		if seg._status == DOWNLOADING {
 			return DOWNLOADING
 		}
+		if seg._status != DOWNLOADED {
+			isAllDownloaded = false
+		}
 	}
 
-	return PENDING
+	if isAllPending {
+		return PENDING
+	}
+
+	if isAllDownloaded {
+		return DOWNLOADED
+	}
+
+	return DOWNLOAD_FAILED
 }
 
 func (r *Resource) WriteAt(b []byte, off int64) (n int, err error) {
@@ -131,7 +154,7 @@ func (rs *ResourceSegment) ContentLength() uint64 {
 	return rs.to - rs.from
 }
 
-func (rs *ResourceSegment) Status() DownloadStatus {
+func (rs *ResourceSegment) Status() ResourceStatus {
 	return rs._status
 }
 
@@ -139,10 +162,28 @@ func (rs *ResourceSegment) StartDownload() {
 	if rs._status != PENDING {
 		panic("The segment is not pending")
 	}
+	if rs.attempts == 0 {
+		panic("The segment has no more attempts")
+	}
 	rs._status = DOWNLOADING
 
 	if err := rs.resource.OpenFile(); err != nil {
 		panic(err)
+	}
+}
+
+func (rs *ResourceSegment) CancelDownload() {
+	if rs._status != DOWNLOADING {
+		panic("The segment is not downloading")
+	}
+	rs.attempts--
+	if rs.attempts < 0 {
+		panic("The segment has -1 attempts")
+	}
+	if rs.attempts == 0 {
+		rs._status = DOWNLOAD_FAILED
+	} else {
+		rs._status = PENDING
 	}
 }
 
@@ -259,7 +300,6 @@ func ConstructDownloaderFromIp(ip string) Downloader {
 
 	client := &http.Client{}
 	client.Transport = transport
-	client.Timeout = time.Second * 2
 
 	return Downloader{client: client}
 }
@@ -284,6 +324,7 @@ func ConstructResourceRequests(downloaders []Downloader, userRequestList []UserR
 
 func ConstructResourceRequestFromUserRequest(downloader *Downloader, request UserRequest) ResourceRequest {
 	client := downloader.client
+	client.Timeout = time.Second * 2
 	req, err := http.NewRequest("HEAD", request.url, nil)
 
 	if err != nil {
@@ -428,7 +469,6 @@ func DownloadResources(downloaders []Downloader, requests []ResourceRequest) {
 	/////////////////////////
 
 	check := make(chan bool)
-	started := 0
 
 	type LiveDownloader struct {
 		entity    *Downloader
@@ -452,24 +492,90 @@ func DownloadResources(downloaders []Downloader, requests []ResourceRequest) {
 				go func(ld2 *LiveDownloader) {
 					ld2.isWorking = true
 					seg := <-pendingQueue
-					seg.StartDownload()
-					started++
 					check <- true
-					// TODO
-					seg.FinishDownload()
+					result := DownloadResource(ld2.entity, seg)
 					ld2.isWorking = false
+					if result != READ_SUCCESS && seg.attempts > 0 {
+						log.Println("DownloadResources return to pending queue, url:", seg.resource.url, "from:", seg.from, "to:", seg.to, "attempts:", seg.attempts) // TODO telemetry
+						pendingQueue <- seg
+						check <- true
+					}
 				}(&ld)
 			}
 		}
 
 		<-check
-		if started == len(segments) {
+		if len(pendingQueue) == 0 {
 			break
 		}
 	}
 
 	/////////////////////////
 	/// TODO
+
+	time.Sleep(10 * time.Second)
+	fmt.Println("done")
+}
+
+type DownloadResult int
+
+const (
+	CLIENT_RETURNED_ERROR DownloadResult = iota
+	STATUS_CODE_NOT_2XX
+	READER_RETURNED_ERROR
+	READ_SUCCESS
+)
+
+func DownloadResource(download *Downloader, seg *ResourceSegment) DownloadResult {
+	seg.StartDownload()
+
+	client := download.client
+	client.Timeout = 0
+	req, err := http.NewRequest("GET", seg.resource.url, nil)
+	req.Header.Add("Range", "bytes="+fmt.Sprint(seg.from)+"-"+fmt.Sprint(seg.to-2))
+
+	if err != nil {
+		panic(err)
+	}
+	resp, err := client.Do(req)
+
+	if err != nil {
+		log.Println("DownloadResource failed, status: CLIENT_RETURNED_ERROR url:", seg.resource.url, "error:", err) // TODO telemetry
+		seg.CancelDownload()
+		return CLIENT_RETURNED_ERROR
+	}
+
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 && resp.StatusCode != 206 {
+		log.Println("DownloadResource failed, status: STATUS_CODE_NOT_2XX url:", seg.resource.url) // TODO telemetry
+		seg.CancelDownload()
+		return STATUS_CODE_NOT_2XX
+	}
+
+	buf := make([]byte, 1024*1024*10) // 10MB buffer
+	offset := int64(seg.from)
+	for {
+		n, err := resp.Body.Read(buf)
+
+		if n > 0 {
+			seg.WriteAt(buf[:n], offset)
+			offset += int64(n)
+			fmt.Println(n)
+		}
+
+		if err == io.EOF {
+			log.Println("DownloadResource EOF, status: READ_SUCCESS url:", seg.resource.url) // TODO telemetry
+			seg.FinishDownload()
+			return READ_SUCCESS
+		}
+
+		if err != nil {
+			log.Println("DownloadResource failed, status: READER_RETURNED_ERROR url:", seg.resource.url, "error:", err) // TODO telemetry
+			seg.CancelDownload()
+			return READER_RETURNED_ERROR
+		}
+	}
 }
 
 func main() {
@@ -530,6 +636,8 @@ Each line can be one of the following formats:
 	}
 
 	fmt.Println(availableRR)
+
+	DownloadResources(downloaders, availableRR)
 
 	// f, err := os.OpenFile("/home/ubuntu/client/output", os.O_RDWR|os.O_CREATE, 0600)
 	// if err != nil {
