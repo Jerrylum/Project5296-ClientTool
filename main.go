@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -50,15 +51,15 @@ type Resource struct {
 	contentLength    uint64 // in bytes
 	isAcceptRange    bool
 	_fd              *os.File
-	_segments        []ResourceSegment
-	_writtenSegments []ResourceSegment
+	_segments        []*ResourceSegment
+	_writtenSegments []*ResourceSegment
 }
 
 type ResourceSegment struct {
 	resource *Resource
 	from     uint64 // inclusive
 	to       uint64 // exclusive
-	attempts uint8
+	ttl      uint8
 	_status  ResourceStatus
 }
 
@@ -69,10 +70,10 @@ const (
 	DOWNLOAD_FAILED
 )
 
-func (r *Resource) AddSegment(from uint64, to uint64) ResourceSegment {
-	segment := ResourceSegment{resource: r, from: from, to: to, attempts: 3, _status: PENDING}
-	r._segments = append(r._segments, segment)
-	return segment
+func (r *Resource) AddSegment(from uint64, to uint64) *ResourceSegment {
+	segment := ResourceSegment{resource: r, from: from, to: to, ttl: 3, _status: PENDING}
+	r._segments = append(r._segments, &segment)
+	return &segment
 }
 
 func (r *Resource) OpenFile() error {
@@ -125,11 +126,11 @@ func (r *Resource) Status() ResourceStatus {
 		}
 	}
 
-	if isAllPending {
+	if isAllPending && !isAllDownloaded {
 		return PENDING
 	}
 
-	if isAllDownloaded {
+	if isAllDownloaded && !isAllPending {
 		return DOWNLOADED
 	}
 
@@ -162,8 +163,8 @@ func (rs *ResourceSegment) StartDownload() {
 	if rs._status != PENDING {
 		panic("The segment is not pending")
 	}
-	if rs.attempts == 0 {
-		panic("The segment has no more attempts")
+	if rs.ttl == 0 {
+		panic("The segment has no more ttl")
 	}
 	rs._status = DOWNLOADING
 
@@ -176,11 +177,11 @@ func (rs *ResourceSegment) CancelDownload() {
 	if rs._status != DOWNLOADING {
 		panic("The segment is not downloading")
 	}
-	rs.attempts--
-	if rs.attempts < 0 {
-		panic("The segment has -1 attempts")
+	rs.ttl--
+	if rs.ttl < 0 {
+		panic("The segment has -1 ttl")
 	}
-	if rs.attempts == 0 {
+	if rs.ttl == 0 {
 		rs._status = DOWNLOAD_FAILED
 	} else {
 		rs._status = PENDING
@@ -195,19 +196,59 @@ func (rs *ResourceSegment) FinishDownload() {
 
 	// remove from _segments in resource
 	for i, seg := range rs.resource._segments {
-		if seg == *rs {
+		if seg == rs {
 			rs.resource._segments = append(rs.resource._segments[:i], rs.resource._segments[i+1:]...)
 			break
 		}
 	}
 
 	// append to _writtenSegments in resource
-	rs.resource._writtenSegments = append(rs.resource._writtenSegments, *rs)
+	rs.resource._writtenSegments = append(rs.resource._writtenSegments, rs)
 
 	// if all segments are downloaded, close the file
 	if len(rs.resource._segments) == 0 {
 		rs.resource.CloseFile()
 	}
+}
+
+func IsAllResourcesFinished(resources []*Resource) bool {
+	for _, resource := range resources {
+		if resource.Status() == DOWNLOADING || resource.Status() == PENDING {
+			return false
+		}
+	}
+	return true
+}
+
+func AddResourceSegmentToSortedList(segments []*ResourceSegment, segment *ResourceSegment) []*ResourceSegment {
+	for i, seg := range segments { // Time complexity: O(n)
+		if seg.ContentLength() < segment.ContentLength() {
+			segments = append(segments[:i], append([]*ResourceSegment{segment}, segments[i:]...)...)
+			return segments
+		}
+	}
+
+	return append(segments, segment)
+}
+
+func RemoveResourceSegmentFromList(segments []*ResourceSegment, segment *ResourceSegment) []*ResourceSegment {
+	for i, seg := range segments { // Time complexity: O(n)
+		if seg == segment {
+			return append(segments[:i], segments[i+1:]...)
+		}
+	}
+
+	return segments
+}
+
+func SplitSegment(firstHalf *ResourceSegment) *ResourceSegment {
+	r := firstHalf.resource
+	middle := firstHalf.from + (firstHalf.to-firstHalf.from)/2
+	end := firstHalf.to
+	secondHalf := ResourceSegment{resource: r, from: middle, to: end, ttl: 3, _status: PENDING}
+	firstHalf.to = middle
+	r._segments = append(r._segments, &secondHalf)
+	return &secondHalf
 }
 
 func ReadFileByLine(path string) []string {
@@ -428,8 +469,8 @@ func DownloadResources(downloaders []Downloader, requests []ResourceRequest) {
 	/// Create resources and split them into segments
 	/////////////////////////
 
-	var resources []Resource
-	var segments []ResourceSegment
+	var resources []*Resource
+	var segments []*ResourceSegment
 	for _, request := range requests {
 		resource := Resource{
 			url:              request.url,
@@ -437,9 +478,10 @@ func DownloadResources(downloaders []Downloader, requests []ResourceRequest) {
 			contentLength:    request.contentLength,
 			isAcceptRange:    request.isAcceptRange,
 			_fd:              nil,
-			_segments:        []ResourceSegment{},
-			_writtenSegments: []ResourceSegment{}}
-		resources = append(resources, resource)
+			_segments:        []*ResourceSegment{},
+			_writtenSegments: []*ResourceSegment{}}
+
+		resources = append(resources, &resource)
 
 		if request.isAcceptRange {
 			for idx := uint64(0); idx < request.contentLength; {
@@ -468,53 +510,74 @@ func DownloadResources(downloaders []Downloader, requests []ResourceRequest) {
 	/// Consume the segments
 	/////////////////////////
 
-	check := make(chan bool)
+	var splittableSegments []*ResourceSegment
+	splitSegmentMutex := sync.Mutex{}
 
-	type LiveDownloader struct {
-		entity    *Downloader
-		isWorking bool
-	}
-
-	liveDownloaders := make([]LiveDownloader, len(downloaders))
-	for i, downloader := range downloaders {
-		liveDownloaders[i] = LiveDownloader{entity: &downloader, isWorking: false}
-	}
-
-	pendingQueue := make(chan *ResourceSegment, len(segments))
+	pendingSegQueue := make(chan *ResourceSegment, len(segments))
 	for _, seg := range segments {
 		putSeg := seg
-		pendingQueue <- &putSeg
+		pendingSegQueue <- putSeg
+	}
+	downloaderQueue := make(chan *Downloader, len(downloaders))
+	for _, downloader := range downloaders {
+		putDownloader := downloader
+		downloaderQueue <- &putDownloader
 	}
 
 	for {
-		for _, ld := range liveDownloaders {
-			if !ld.isWorking {
-				go func(ld2 *LiveDownloader) {
-					ld2.isWorking = true
-					seg := <-pendingQueue
-					check <- true
-					result := DownloadResource(ld2.entity, seg)
-					ld2.isWorking = false
-					if result != READ_SUCCESS && seg.attempts > 0 {
-						log.Println("DownloadResources return to pending queue, url:", seg.resource.url, "from:", seg.from, "to:", seg.to, "attempts:", seg.attempts) // TODO telemetry
-						pendingQueue <- seg
-						check <- true
-					}
-				}(&ld)
-			}
-		}
+		dwn := <-downloaderQueue
 
-		<-check
-		if len(pendingQueue) == 0 {
+		// break if all resources are downloaded or failed
+		if IsAllResourcesFinished(resources) {
 			break
 		}
+
+		var seg *ResourceSegment
+		if len(pendingSegQueue) != 0 {
+			seg = <-pendingSegQueue
+		} else if len(splittableSegments) != 0 {
+			splitSegmentMutex.Lock()
+			firstHalf := splittableSegments[0]
+			splittableSegments = splittableSegments[1:] // pop first element
+			splitSegmentMutex.Unlock()
+
+			secondHalf := SplitSegment(firstHalf)
+			segments = append(segments, secondHalf)
+			seg = secondHalf
+		} else {
+			downloaderQueue <- dwn
+			log.Println("DownloadResources idle") // TODO telemetry
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+
+		if seg.ContentLength() > 1024 { // TODO configurable 1KB
+			splitSegmentMutex.Lock()
+			splittableSegments = AddResourceSegmentToSortedList(splittableSegments, seg)
+			splitSegmentMutex.Unlock()
+		}
+
+		go func(dwn *Downloader, seg *ResourceSegment) {
+			result := DownloadResource(dwn, seg)
+			splitSegmentMutex.Lock()
+			splittableSegments = RemoveResourceSegmentFromList(splittableSegments, seg)
+			splitSegmentMutex.Unlock()
+
+			if result == READ_SUCCESS {
+				log.Println("DownloadResources success, url:", seg.resource.url, "from:", seg.from, "to:", seg.to) // TODO telemetry
+			} else {
+				if seg.ttl > 0 {
+					log.Println("DownloadResources return to pending queue, url:", seg.resource.url, "from:", seg.from, "to:", seg.to, "ttl:", seg.ttl) // TODO telemetry
+					pendingSegQueue <- seg
+				} else {
+					log.Println("DownloadResources ttl = 0, url:", seg.resource.url, "from:", seg.from, "to:", seg.to) // TODO telemetry
+				}
+			}
+			downloaderQueue <- dwn
+		}(dwn, seg)
 	}
 
-	/////////////////////////
-	/// TODO
-
-	time.Sleep(10 * time.Second)
-	fmt.Println("done")
+	log.Println("DownloadResources finished") // TODO telemetry
 }
 
 type DownloadResult int
@@ -554,14 +617,20 @@ func DownloadResource(download *Downloader, seg *ResourceSegment) DownloadResult
 	}
 
 	buf := make([]byte, 1024*1024*10) // 10MB buffer
-	offset := int64(seg.from)
+	offset := seg.from
 	for {
 		n, err := resp.Body.Read(buf)
 
 		if n > 0 {
-			seg.WriteAt(buf[:n], offset)
-			offset += int64(n)
+			seg.WriteAt(buf[:n], int64(offset))
+			offset += uint64(n)
 			fmt.Println(n)
+		}
+
+		if offset >= seg.to {
+			log.Println("DownloadResource break, status: READ_SUCCESS url:", seg.resource.url) // TODO telemetry
+			seg.FinishDownload()
+			return READ_SUCCESS
 		}
 
 		if err == io.EOF {
@@ -638,17 +707,4 @@ Each line can be one of the following formats:
 	fmt.Println(availableRR)
 
 	DownloadResources(downloaders, availableRR)
-
-	// f, err := os.OpenFile("/home/ubuntu/client/output", os.O_RDWR|os.O_CREATE, 0600)
-	// if err != nil {
-	// 	panic(err)
-	// }
-
-	// // string to bytes
-	// b := []byte("hello world     ") // 16 bytes
-	// // f.Write(b)
-	// f.WriteAt(b, 1024*1024*1024)
-
-	// defer f.Close()
-
 }
