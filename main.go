@@ -24,46 +24,6 @@ func ReadFileByLine(path string) []string {
 	return rtn
 }
 
-func ConsumeJobs[T any](workers []T, jobs []func(worker *T)) {
-	check := make(chan bool)
-	consumed := 0
-
-	type LiveWorker struct {
-		entity    *T
-		isWorking bool
-	}
-
-	liveDownloaders := make([]LiveWorker, len(workers))
-	for i, downloader := range workers {
-		liveDownloaders[i] = LiveWorker{entity: &downloader, isWorking: false}
-	}
-
-	jobsQueue := make(chan *func(worker *T), len(jobs))
-	for _, job := range jobs {
-		putJob := job
-		jobsQueue <- &putJob
-	}
-
-	for {
-		for _, ld := range liveDownloaders {
-			if !ld.isWorking {
-				go func(ld2 *LiveWorker) {
-					ld2.isWorking = true
-					(*<-jobsQueue)(ld2.entity)
-					ld2.isWorking = false
-					consumed++
-					check <- true
-				}(&ld)
-			}
-		}
-
-		<-check
-		if consumed == len(jobs) {
-			break
-		}
-	}
-}
-
 func DownloadResources(downloaders DownloaderCluster, requests []ResourceRequest) []*Resource {
 	/////////////////////////
 	/// Calculate the total size of the requests
@@ -106,7 +66,7 @@ func DownloadResources(downloaders DownloaderCluster, requests []ResourceRequest
 	})
 
 	/////////////////////////
-	/// Consume the segments
+	/// Download the segments
 	/////////////////////////
 
 	downloaders.Download(segments)
