@@ -221,11 +221,6 @@ func (ls *ThreadSafeSortedList[T]) Add(item *T) {
 	ls.mutex.Lock()
 	defer ls.mutex.Unlock()
 
-	// list.list = append(list.list, item)
-	// sort.Slice(list.list, func(i, j int) bool {
-	// 	return list.less(list.list[i], list.list[j])
-	// })
-
 	// Time complexity: O(n)
 	for i, listItem := range ls.list {
 		if ls.less(item, listItem) {
@@ -233,6 +228,8 @@ func (ls *ThreadSafeSortedList[T]) Add(item *T) {
 			return
 		}
 	}
+
+	ls.list = append(ls.list, item)
 }
 
 func (ls *ThreadSafeSortedList[T]) Remove(item *T) bool {
@@ -250,6 +247,26 @@ func (ls *ThreadSafeSortedList[T]) Remove(item *T) bool {
 	return false
 }
 
+func (ls *ThreadSafeSortedList[T]) Len() int {
+	ls.mutex.Lock()
+	defer ls.mutex.Unlock()
+
+	return len(ls.list)
+}
+
+func (ls *ThreadSafeSortedList[T]) Pop() *T {
+	ls.mutex.Lock()
+	defer ls.mutex.Unlock()
+
+	if len(ls.list) == 0 {
+		return nil
+	}
+
+	item := ls.list[0]
+	ls.list = ls.list[1:]
+	return item
+}
+
 func IsAllResourcesFinished(resources []*Resource) bool {
 	for _, resource := range resources {
 		if resource.Status() == DOWNLOADING || resource.Status() == PENDING {
@@ -257,27 +274,6 @@ func IsAllResourcesFinished(resources []*Resource) bool {
 		}
 	}
 	return true
-}
-
-func AddResourceSegmentToSortedList(segments []*ResourceSegment, segment *ResourceSegment) []*ResourceSegment {
-	for i, seg := range segments { // Time complexity: O(n)
-		if seg.ContentLength() < segment.ContentLength() {
-			segments = append(segments[:i], append([]*ResourceSegment{segment}, segments[i:]...)...)
-			return segments
-		}
-	}
-
-	return append(segments, segment)
-}
-
-func RemoveResourceSegmentFromList(segments []*ResourceSegment, segment *ResourceSegment) []*ResourceSegment {
-	for i, seg := range segments { // Time complexity: O(n)
-		if seg == segment {
-			return append(segments[:i], segments[i+1:]...)
-		}
-	}
-
-	return segments
 }
 
 func SplitSegment(firstHalf *ResourceSegment) *ResourceSegment {
@@ -549,10 +545,11 @@ func DownloadResources(downloaders []Downloader, requests []ResourceRequest) {
 	/// Consume the segments
 	/////////////////////////
 
-	// var splittableSegments []*ResourceSegment
-	// splitSegmentMutex := sync.Mutex{}
-
-	var focusingSegments ThreadSafeSortedList[ResourceSegment]
+	waitingSplitSegList := ThreadSafeSortedList[ResourceSegment]{
+		list: []*ResourceSegment{},
+		less: func(i, j *ResourceSegment) bool {
+			return i.ContentLength() > j.ContentLength()
+		}}
 
 	pendingSegQueue := make(chan *ResourceSegment, len(segments))
 	for _, seg := range segments {
@@ -576,10 +573,8 @@ func DownloadResources(downloaders []Downloader, requests []ResourceRequest) {
 		var seg *ResourceSegment
 		if len(pendingSegQueue) != 0 {
 			seg = <-pendingSegQueue
-		} else if len(focusingSegments.list) != 0 {
-			firstHalf := focusingSegments.list[0]
-			focusingSegments.Remove(firstHalf)
-
+		} else if waitingSplitSegList.Len() != 0 {
+			firstHalf := waitingSplitSegList.Pop()
 			secondHalf := SplitSegment(firstHalf)
 			segments = append(segments, secondHalf)
 			seg = secondHalf
@@ -590,13 +585,13 @@ func DownloadResources(downloaders []Downloader, requests []ResourceRequest) {
 			continue
 		}
 
-		if seg.ContentLength() > 1024 { // TODO configurable 1KB
-			focusingSegments.Add(seg)
+		if seg.resource.isAcceptRange && seg.ContentLength() > 1024 { // TODO configurable 1KB
+			waitingSplitSegList.Add(seg)
 		}
 
 		go func(dwn *Downloader, seg *ResourceSegment) {
 			result := DownloadResource(dwn, seg)
-			focusingSegments.Remove(seg)
+			waitingSplitSegList.Remove(seg)
 
 			if result == READ_SUCCESS {
 				log.Println("DownloadResources success, url:", seg.resource.url, "from:", seg.from, "to:", seg.to) // TODO telemetry
