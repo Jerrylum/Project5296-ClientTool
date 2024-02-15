@@ -1,7 +1,6 @@
 package main
 
 import (
-	"crypto/tls"
 	"flag"
 	"fmt"
 	"io"
@@ -13,13 +12,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 )
-
-type Downloader struct {
-	client *http.Client
-}
 
 type UserRequest struct {
 	url  string
@@ -43,230 +37,6 @@ const (
 	CONNECTION_REFUSED
 )
 
-type ResourceStatus int
-
-type Resource struct {
-	url              string
-	dest             string
-	contentLength    uint64 // in bytes
-	isAcceptRange    bool
-	_fd              *os.File
-	_segments        []*ResourceSegment
-	_writtenSegments []*ResourceSegment
-}
-
-type ResourceSegment struct {
-	resource *Resource
-	from     uint64 // inclusive
-	to       uint64 // exclusive
-	ttl      uint8
-	_status  ResourceStatus
-}
-
-type ThreadSafeSortedList[T any] struct {
-	list  []*T
-	less  func(i, j *T) bool
-	mutex sync.Mutex
-}
-
-const (
-	PENDING ResourceStatus = iota
-	DOWNLOADING
-	DOWNLOADED
-	DOWNLOAD_FAILED
-)
-
-func (r *Resource) AddSegment(from uint64, to uint64) *ResourceSegment {
-	segment := ResourceSegment{resource: r, from: from, to: to, ttl: 3, _status: PENDING}
-	r._segments = append(r._segments, &segment)
-	return &segment
-}
-
-func (r *Resource) OpenFile() error {
-	if r._fd != nil {
-		return nil
-	}
-
-	f, err := os.OpenFile(r.dest, os.O_RDWR|os.O_CREATE, 0600)
-	if err != nil {
-		return err
-	}
-
-	r._fd = f
-	return nil
-}
-
-func (r *Resource) CloseFile() error {
-	if r._fd == nil {
-		return nil
-	}
-
-	err := r._fd.Close()
-	if err != nil {
-		return err
-	}
-
-	r._fd = nil
-	return nil
-}
-
-/*
-PENDING: All segments are pending
-DOWNLOADING: At least one segment is downloading
-DOWNLOADED: All segments are downloaded successfully
-DOWNLOAD_FAILED: No segments are downloading/pending and at least one segment is downloaded unsuccessfully
-*/
-func (r *Resource) Status() ResourceStatus {
-	// if all segments are pending
-	isAllPending := true
-	isAllDownloaded := true
-	for _, seg := range r._segments {
-		if seg._status != PENDING {
-			isAllPending = false
-		}
-		if seg._status == DOWNLOADING {
-			return DOWNLOADING
-		}
-		if seg._status != DOWNLOADED {
-			isAllDownloaded = false
-		}
-	}
-
-	if isAllPending && !isAllDownloaded {
-		return PENDING
-	}
-
-	if isAllDownloaded && !isAllPending {
-		return DOWNLOADED
-	}
-
-	return DOWNLOAD_FAILED
-}
-
-func (r *Resource) WriteAt(b []byte, off int64) (n int, err error) {
-	if r._fd == nil {
-		return 0, fmt.Errorf("The file is not opened")
-	}
-	return r._fd.WriteAt(b, off)
-}
-
-func (rs *ResourceSegment) ContentLength() uint64 {
-	return rs.to - rs.from
-}
-
-func (rs *ResourceSegment) Status() ResourceStatus {
-	return rs._status
-}
-
-func (rs *ResourceSegment) StartDownload() {
-	if rs._status != PENDING {
-		panic("The segment is not pending")
-	}
-	if rs.ttl == 0 {
-		panic("The segment has no more ttl")
-	}
-	rs._status = DOWNLOADING
-
-	if err := rs.resource.OpenFile(); err != nil {
-		panic(err)
-	}
-}
-
-func (rs *ResourceSegment) CancelDownload() {
-	if rs._status != DOWNLOADING {
-		panic("The segment is not downloading")
-	}
-	rs.ttl--
-	if rs.ttl < 0 {
-		panic("The segment has -1 ttl")
-	}
-	if rs.ttl == 0 {
-		rs._status = DOWNLOAD_FAILED
-	} else {
-		rs._status = PENDING
-	}
-}
-
-func (rs *ResourceSegment) FinishDownload() {
-	if rs._status != DOWNLOADING {
-		panic("The segment is not downloading")
-	}
-	rs._status = DOWNLOADED
-
-	// remove from _segments in resource
-	for i, seg := range rs.resource._segments {
-		if seg == rs {
-			rs.resource._segments = append(rs.resource._segments[:i], rs.resource._segments[i+1:]...)
-			break
-		}
-	}
-
-	// append to _writtenSegments in resource
-	rs.resource._writtenSegments = append(rs.resource._writtenSegments, rs)
-
-	// if all segments are downloaded, close the file
-	if len(rs.resource._segments) == 0 {
-		rs.resource.CloseFile()
-	}
-}
-
-func (rs *ResourceSegment) WriteAt(b []byte, off int64) (n int, err error) {
-	if rs._status != DOWNLOADING {
-		return 0, fmt.Errorf("The segment is not downloading")
-	}
-	return rs.resource.WriteAt(b, off)
-}
-
-func (ls *ThreadSafeSortedList[T]) Add(item *T) {
-	ls.mutex.Lock()
-	defer ls.mutex.Unlock()
-
-	// Time complexity: O(n)
-	for i, listItem := range ls.list {
-		if ls.less(item, listItem) {
-			ls.list = append(ls.list[:i], append([]*T{item}, ls.list[i:]...)...)
-			return
-		}
-	}
-
-	ls.list = append(ls.list, item)
-}
-
-func (ls *ThreadSafeSortedList[T]) Remove(item *T) bool {
-	ls.mutex.Lock()
-	defer ls.mutex.Unlock()
-
-	// Time complexity: O(n)
-	for i, listItem := range ls.list {
-		if listItem == item {
-			ls.list = append(ls.list[:i], ls.list[i+1:]...)
-			return true
-		}
-	}
-
-	return false
-}
-
-func (ls *ThreadSafeSortedList[T]) Len() int {
-	ls.mutex.Lock()
-	defer ls.mutex.Unlock()
-
-	return len(ls.list)
-}
-
-func (ls *ThreadSafeSortedList[T]) Pop() *T {
-	ls.mutex.Lock()
-	defer ls.mutex.Unlock()
-
-	if len(ls.list) == 0 {
-		return nil
-	}
-
-	item := ls.list[0]
-	ls.list = ls.list[1:]
-	return item
-}
-
 func IsAllResourcesFinished(resources []*Resource) bool {
 	for _, resource := range resources {
 		if resource.Status() == DOWNLOADING || resource.Status() == PENDING {
@@ -274,16 +44,6 @@ func IsAllResourcesFinished(resources []*Resource) bool {
 		}
 	}
 	return true
-}
-
-func SplitSegment(firstHalf *ResourceSegment) *ResourceSegment {
-	r := firstHalf.resource
-	middle := firstHalf.from + (firstHalf.to-firstHalf.from)/2
-	end := firstHalf.to
-	secondHalf := ResourceSegment{resource: r, from: middle, to: end, ttl: 3, _status: PENDING}
-	firstHalf.to = middle
-	r._segments = append(r._segments, &secondHalf)
-	return &secondHalf
 }
 
 func ReadFileByLine(path string) []string {
@@ -300,26 +60,6 @@ func ReadFileByLine(path string) []string {
 	}
 
 	return rtn
-}
-
-func ConstructDownloadersFromIpList(ipList []string, numOfConn int) []Downloader {
-	if len(ipList) == 0 || numOfConn <= 0 {
-		panic("No proxy server or invalid number of connections provided")
-	}
-
-	var downloaders []Downloader
-	var i = numOfConn
-
-	for {
-		for _, ip := range ipList {
-			downloaders = append(downloaders, ConstructDownloaderFromIp(ip))
-			i--
-
-			if i == 0 {
-				return downloaders
-			}
-		}
-	}
 }
 
 func ConstructUserRequestsFromStringList(requests []string) []UserRequest {
@@ -347,7 +87,7 @@ func ConstructUserRequestsFromStringList(requests []string) []UserRequest {
 
 		dest := ""
 		info1, err2 := os.Stat(rawDest)
-		if err2 == nil && info1.IsDir() == false {
+		if err2 == nil && !info1.IsDir() {
 			dest = rawDest // overwrite the destination
 		} else if err2 == nil && info1.IsDir() {
 			dest = path.Join(rawDest, urlFileName)
@@ -364,20 +104,6 @@ func ConstructUserRequestsFromStringList(requests []string) []UserRequest {
 	}
 
 	return userRequests
-}
-
-func ConstructDownloaderFromIp(ip string) Downloader {
-	url_i := url.URL{}
-	url_proxy, _ := url_i.Parse("http://" + ip + ":3000")
-
-	transport := &http.Transport{}
-	transport.Proxy = http.ProxyURL(url_proxy)                        // set proxy
-	transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} // set ssl
-
-	client := &http.Client{}
-	client.Transport = transport
-
-	return Downloader{client: client}
 }
 
 func ConstructResourceRequests(downloaders []Downloader, userRequestList []UserRequest) []ResourceRequest {
