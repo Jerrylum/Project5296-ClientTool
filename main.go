@@ -60,6 +60,7 @@ func DownloadResources(downloaders DownloaderCluster, requests ResourceRequestLi
 	/// Download the segments
 	/////////////////////////
 
+	telemetry.Start(&downloaders, &requests, &resources, &segments)
 	downloaders.Download(segments)
 
 	return resources
@@ -80,6 +81,7 @@ Each line can be one of the following formats:
    The file will be saved to the specified path
 `)
 	numOfConnRaw := flag.Int("connections", 0, "The number of connections in total to download")
+	logFilePathRaw := flag.String("log", "", "The path to the log file. If not provided, the log will be discarded.")
 
 	flag.Parse()
 
@@ -123,7 +125,14 @@ Each line can be one of the following formats:
 		}
 	}
 
-	fmt.Println(availableRR)
+	if len(downloaders) == 0 {
+		fmt.Println("No downloader available")
+		os.Exit(1)
+	}
+
+	telemetry.Init(*logFilePathRaw)
+
+	// fmt.Println(availableRR)
 
 	DownloadResources(downloaders, availableRR)
 }

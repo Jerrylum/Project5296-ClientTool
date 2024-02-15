@@ -141,7 +141,7 @@ func (dwn *Downloader) Download(seg *ResourceSegment) DownloadResult {
 		if n > 0 {
 			seg.WriteAt(buf[:n], int64(offset))
 			offset += uint64(n)
-			fmt.Println(n)
+			// fmt.Println(n) // TODO telemetry
 		}
 
 		if offset >= seg.to {
@@ -220,7 +220,7 @@ func (dc *DownloaderCluster) Download(segments []*ResourceSegment) {
 			seg = secondHalf
 		} else {
 			downloaderQueue <- dwn
-			log.Println("DownloadResources idle") // TODO telemetry
+			log.Println("Download([]*ResourceSegment) idle") // TODO telemetry
 			time.Sleep(100 * time.Millisecond)
 			continue
 		}
@@ -234,20 +234,20 @@ func (dc *DownloaderCluster) Download(segments []*ResourceSegment) {
 			waitingSplitSegList.Remove(seg)
 
 			if result == READ_SUCCESS {
-				log.Println("DownloadResources success, url:", seg.resource.url, "from:", seg.from, "to:", seg.to) // TODO telemetry
+				log.Println("Download([]*ResourceSegment) success, url:", seg.resource.url, "from:", seg.from, "to:", seg.to) // TODO telemetry
 			} else {
 				if seg.ttl > 0 {
-					log.Println("DownloadResources return to pending queue, url:", seg.resource.url, "from:", seg.from, "to:", seg.to, "ttl:", seg.ttl) // TODO telemetry
+					log.Println("Download([]*ResourceSegment) return to pending queue, url:", seg.resource.url, "from:", seg.from, "to:", seg.to, "ttl:", seg.ttl) // TODO telemetry
 					pendingSegQueue <- seg
 				} else {
-					log.Println("DownloadResources ttl = 0, url:", seg.resource.url, "from:", seg.from, "to:", seg.to) // TODO telemetry
+					log.Println("Download([]*ResourceSegment) ttl = 0, url:", seg.resource.url, "from:", seg.from, "to:", seg.to) // TODO telemetry
 				}
 			}
 			downloaderQueue <- dwn
 		}(dwn, seg)
 	}
 
-	log.Println("DownloadResources finished") // TODO telemetry
+	log.Println("Download([]*ResourceSegment) finished") // TODO telemetry
 }
 
 type IpList []string
