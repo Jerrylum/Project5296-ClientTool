@@ -5,6 +5,15 @@ import (
 	"os"
 )
 
+type ResourceStatus int
+
+const (
+	PENDING ResourceStatus = iota
+	DOWNLOADING
+	DOWNLOADED
+	DOWNLOAD_FAILED
+)
+
 type Resource struct {
 	url              string
 	dest             string
@@ -14,23 +23,6 @@ type Resource struct {
 	_segments        []*ResourceSegment
 	_writtenSegments []*ResourceSegment
 }
-
-type ResourceSegment struct {
-	resource *Resource
-	from     uint64 // inclusive
-	to       uint64 // exclusive
-	ttl      uint8
-	status   ResourceStatus
-}
-
-type ResourceStatus int
-
-const (
-	PENDING ResourceStatus = iota
-	DOWNLOADING
-	DOWNLOADED
-	DOWNLOAD_FAILED
-)
 
 func (r *Resource) AddSegment(from uint64, to uint64) *ResourceSegment {
 	segment := ResourceSegment{resource: r, from: from, to: to, ttl: 3, status: PENDING}
@@ -106,6 +98,14 @@ func (r *Resource) WriteAt(b []byte, off int64) (n int, err error) {
 	return r._fd.WriteAt(b, off)
 }
 
+type ResourceSegment struct {
+	resource *Resource
+	from     uint64 // inclusive
+	to       uint64 // exclusive
+	ttl      uint8
+	status   ResourceStatus
+}
+
 func (rs *ResourceSegment) ContentLength() uint64 {
 	return rs.to - rs.from
 }
@@ -169,7 +169,7 @@ func (rs *ResourceSegment) WriteAt(b []byte, off int64) (n int, err error) {
 	return rs.resource.WriteAt(b, off)
 }
 
-func SplitSegment(firstHalf *ResourceSegment) *ResourceSegment {
+func (firstHalf *ResourceSegment) Split() *ResourceSegment {
 	r := firstHalf.resource
 	middle := firstHalf.from + (firstHalf.to-firstHalf.from)/2
 	end := firstHalf.to
