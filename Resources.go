@@ -24,10 +24,21 @@ type Resource struct {
 	_writtenSegments []*ResourceSegment
 }
 
-func (r *Resource) AddSegment(from uint64, to uint64) *ResourceSegment {
-	segment := ResourceSegment{resource: r, from: from, to: to, ttl: 3, status: PENDING}
-	r._segments = append(r._segments, &segment)
-	return &segment
+func (r *Resource) SliceSegments(chunkSize uint64) []*ResourceSegment {
+	if r.isAcceptRange {
+		segments := []*ResourceSegment{}
+		for idx := uint64(0); idx < r.contentLength; {
+			maxChunkSize := min(r.contentLength, idx+chunkSize)
+			segment := ResourceSegment{resource: r, from: idx, to: maxChunkSize, ttl: 3, status: PENDING}
+			segments = append(segments, &segment)
+			idx += maxChunkSize
+		}
+		r._segments = segments
+	} else {
+		segment := ResourceSegment{resource: r, from: 0, to: r.contentLength, ttl: 3, status: PENDING}
+		r._segments = []*ResourceSegment{&segment}
+	}
+	return r._segments
 }
 
 func (r *Resource) OpenFile() error {

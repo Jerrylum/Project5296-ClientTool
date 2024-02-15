@@ -93,18 +93,7 @@ func DownloadResources(downloaders DownloaderCluster, requests []ResourceRequest
 			_writtenSegments: []*ResourceSegment{}}
 
 		resources = append(resources, &resource)
-
-		if request.isAcceptRange {
-			for idx := uint64(0); idx < request.contentLength; {
-				maxChunkSize := min(request.contentLength, idx+chunkSize)
-				segment := resource.AddSegment(idx, maxChunkSize)
-				segments = append(segments, segment)
-				idx += maxChunkSize
-			}
-		} else {
-			segment := resource.AddSegment(0, request.contentLength)
-			segments = append(segments, segment)
-		}
+		segments = append(segments, resource.SliceSegments(chunkSize)...)
 	}
 
 	/////////////////////////
