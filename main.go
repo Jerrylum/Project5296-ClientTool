@@ -45,7 +45,10 @@ const (
 
 type ResourceStatus int
 
+type ResourceLike struct{}
+
 type Resource struct {
+	ResourceLike
 	url              string
 	dest             string
 	contentLength    uint64 // in bytes
@@ -56,11 +59,18 @@ type Resource struct {
 }
 
 type ResourceSegment struct {
+	ResourceLike
 	resource *Resource
 	from     uint64 // inclusive
 	to       uint64 // exclusive
 	ttl      uint8
 	_status  ResourceStatus
+}
+
+type ThreadSafeSortedList[T ResourceLike] struct {
+	list  []T
+	less  func(i, j T) bool
+	mutex sync.Mutex
 }
 
 const (
@@ -144,13 +154,6 @@ func (r *Resource) WriteAt(b []byte, off int64) (n int, err error) {
 	return r._fd.WriteAt(b, off)
 }
 
-func (rs *ResourceSegment) WriteAt(b []byte, off int64) (n int, err error) {
-	if rs._status != DOWNLOADING {
-		return 0, fmt.Errorf("The segment is not downloading")
-	}
-	return rs.resource.WriteAt(b, off)
-}
-
 func (rs *ResourceSegment) ContentLength() uint64 {
 	return rs.to - rs.from
 }
@@ -209,6 +212,46 @@ func (rs *ResourceSegment) FinishDownload() {
 	if len(rs.resource._segments) == 0 {
 		rs.resource.CloseFile()
 	}
+}
+
+func (rs *ResourceSegment) WriteAt(b []byte, off int64) (n int, err error) {
+	if rs._status != DOWNLOADING {
+		return 0, fmt.Errorf("The segment is not downloading")
+	}
+	return rs.resource.WriteAt(b, off)
+}
+
+func (ls *ThreadSafeSortedList[T]) Add(item T) {
+	ls.mutex.Lock()
+	defer ls.mutex.Unlock()
+
+	// list.list = append(list.list, item)
+	// sort.Slice(list.list, func(i, j int) bool {
+	// 	return list.less(list.list[i], list.list[j])
+	// })
+
+	// Time complexity: O(n)
+	for i, listItem := range ls.list {
+		if ls.less(item, listItem) {
+			ls.list = append(ls.list[:i], append([]T{item}, ls.list[i:]...)...)
+			return
+		}
+	}
+}
+
+func (ls *ThreadSafeSortedList[T]) Remove(item T) bool {
+	ls.mutex.Lock()
+	defer ls.mutex.Unlock()
+
+	// Time complexity: O(n)
+	for i, listItem := range ls.list {
+		if listItem == item {
+			ls.list = append(ls.list[:i], ls.list[i+1:]...)
+			return true
+		}
+	}
+
+	return false
 }
 
 func IsAllResourcesFinished(resources []*Resource) bool {
