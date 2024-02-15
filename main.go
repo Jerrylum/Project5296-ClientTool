@@ -172,8 +172,8 @@ Each line can be one of the following formats:
 	originalUserRequests := OriginalUserRequestList(ReadFileByLine(*requestListPathRaw))
 
 	numOfConn := *numOfConnRaw
-	downloaders := proxyIps.toDownloaderCluster(numOfConn)
-	userRequests := originalUserRequests.toUserRequests()
+	downloaders := proxyIps.ToDownloaderCluster(numOfConn)
+	userRequests := originalUserRequests.ToUserRequests()
 	resourceRequests := downloaders.FetchResourceRequests(userRequests)
 
 	availableRR := []ResourceRequest{}

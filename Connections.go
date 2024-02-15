@@ -252,7 +252,7 @@ func (dc *DownloaderCluster) Download(segments []*ResourceSegment) {
 
 type IpList []string
 
-func (ipList *IpList) toDownloaderCluster(numOfConn int) DownloaderCluster {
+func (ipList *IpList) ToDownloaderCluster(numOfConn int) DownloaderCluster {
 	if len(*ipList) == 0 || numOfConn <= 0 {
 		panic("No proxy server or invalid number of connections provided")
 	}
@@ -274,7 +274,7 @@ func (ipList *IpList) toDownloaderCluster(numOfConn int) DownloaderCluster {
 
 type OriginalUserRequestList []string
 
-func (ourList *OriginalUserRequestList) toUserRequests() []UserRequest {
+func (ourList *OriginalUserRequestList) ToUserRequests() []UserRequest {
 	var userRequests []UserRequest
 	for _, request := range *ourList {
 		rawUrl := ""
