@@ -24,7 +24,7 @@ type Resource struct {
 	_writtenSegments []*ResourceSegment
 }
 
-func (r *Resource) SliceSegments(chunkSize uint64) []*ResourceSegment {
+func (r *Resource) SliceSegments(chunkSize uint64) {
 	if r.isAcceptRange {
 		segments := []*ResourceSegment{}
 		for idx := uint64(0); idx < r.contentLength; {
@@ -38,7 +38,6 @@ func (r *Resource) SliceSegments(chunkSize uint64) []*ResourceSegment {
 		segment := ResourceSegment{resource: r, from: 0, to: r.contentLength, ttl: 3, status: PENDING}
 		r._segments = []*ResourceSegment{&segment}
 	}
-	return r._segments
 }
 
 func (r *Resource) OpenFile() error {
@@ -188,4 +187,13 @@ func (firstHalf *ResourceSegment) Split() *ResourceSegment {
 	firstHalf.to = middle
 	r._segments = append(r._segments, &secondHalf)
 	return &secondHalf
+}
+
+func IsAllSegmentsFinished(segments []*ResourceSegment) bool {
+	for _, seg := range segments {
+		if seg.status == DOWNLOADING || seg.status == PENDING {
+			return false
+		}
+	}
+	return true
 }

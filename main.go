@@ -24,41 +24,32 @@ func ReadFileByLine(path string) []string {
 	return rtn
 }
 
-func DownloadResources(downloaders DownloaderCluster, requests []ResourceRequest) []*Resource {
-	/////////////////////////
-	/// Calculate the total size of the requests
-	/////////////////////////
-
-	totalSize := uint64(0) // in bytes
-	for _, request := range requests {
-		totalSize += request.contentLength
+func DownloadResources(downloaders DownloaderCluster, requests ResourceRequestList) []*Resource {
+	if len(downloaders) == 0 {
+		panic("No downloader provided")
 	}
 
-	chunkSize := totalSize / uint64(len(downloaders))
+	/////////////////////////
+	/// Calculate the chunk size for each downloader
+	/////////////////////////
+
+	chunkSize := requests.TotalContentLength() / uint64(len(downloaders))
 
 	/////////////////////////
 	/// Create resources and split them into segments
 	/////////////////////////
 
-	var resources []*Resource
-	var segments []*ResourceSegment
-	for _, request := range requests {
-		resource := Resource{
-			url:              request.url,
-			dest:             request.dest,
-			contentLength:    request.contentLength,
-			isAcceptRange:    request.isAcceptRange,
-			_fd:              nil,
-			_segments:        []*ResourceSegment{},
-			_writtenSegments: []*ResourceSegment{}}
-
-		resources = append(resources, &resource)
-		segments = append(segments, resource.SliceSegments(chunkSize)...)
-	}
+	resources := requests.ToResources(chunkSize)
 
 	/////////////////////////
 	/// Sort the segments by the size from largest to smallest
 	/////////////////////////
+
+	segments := []*ResourceSegment{}
+
+	for _, resource := range resources {
+		segments = append(segments, resource._segments...)
+	}
 
 	// We want to download the largest segments first to better balance the load among the downloaders
 	sort.Slice(segments, func(i, j int) bool {

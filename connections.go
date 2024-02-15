@@ -166,8 +166,8 @@ func (dwn *Downloader) Download(seg *ResourceSegment) DownloadResult {
 
 type DownloaderCluster []Downloader
 
-func (dc *DownloaderCluster) FetchResourceRequests(userRequests []UserRequest) []ResourceRequest {
-	resourceRequests := make([]ResourceRequest, len(userRequests))
+func (dc *DownloaderCluster) FetchResourceRequests(userRequests []UserRequest) ResourceRequestList {
+	resourceRequests := make(ResourceRequestList, len(userRequests))
 
 	jobs := make([]func(worker *Downloader), len(userRequests))
 	for i, request := range userRequests {
@@ -318,6 +318,36 @@ func (ourList *OriginalUserRequestList) ToUserRequests() []UserRequest {
 	return userRequests
 }
 
+type ResourceRequestList []ResourceRequest
+
+func (rrl *ResourceRequestList) TotalContentLength() uint64 {
+	totalSize := uint64(0) // in bytes
+	for _, request := range *rrl {
+		totalSize += request.contentLength
+	}
+
+	return totalSize
+}
+
+func (rrl *ResourceRequestList) ToResources(chunkSize uint64) []*Resource {
+	var resources []*Resource
+	for _, request := range *rrl {
+		resource := Resource{
+			url:              request.url,
+			dest:             request.dest,
+			contentLength:    request.contentLength,
+			isAcceptRange:    request.isAcceptRange,
+			_fd:              nil,
+			_segments:        []*ResourceSegment{},
+			_writtenSegments: []*ResourceSegment{}}
+
+		resources = append(resources, &resource)
+		resource.SliceSegments(chunkSize)
+	}
+
+	return resources
+}
+
 func ConstructDownloaderFromIp(ip string) Downloader {
 	url_i := url.URL{}
 	url_proxy, _ := url_i.Parse("http://" + ip + ":3000")
@@ -330,13 +360,4 @@ func ConstructDownloaderFromIp(ip string) Downloader {
 	client.Transport = transport
 
 	return Downloader{client: client}
-}
-
-func IsAllSegmentsFinished(segments []*ResourceSegment) bool {
-	for _, seg := range segments {
-		if seg.status == DOWNLOADING || seg.status == PENDING {
-			return false
-		}
-	}
-	return true
 }
