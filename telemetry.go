@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -108,13 +109,13 @@ func (tel *Telemetry) Update() {
 	// usableWidth := uint(30)
 
 	for _, r := range *tel.resources {
-		for _, rs := range r._segments {
+		rss := append(r._segments, r._writtenSegments...)
+		sort.Slice(rss, func(i, j int) bool {
+			return rss[i].from < rss[j].from
+		})
+		for _, rs := range rss {
 			tel.PrintResourceSegmentProgress(rs, usableWidth)
 		}
-		for _, rs := range r._writtenSegments {
-			tel.PrintResourceSegmentProgress(rs, usableWidth)
-		}
-		// TODO order
 	}
 
 	tm.Flush()
@@ -162,6 +163,7 @@ func (tel *Telemetry) PrintResourceSegmentProgress(rs *ResourceSegment, usableWi
 	dwnProgress := min(tel.GetResourceSegmentProgress(rs), rs.ContentLength())
 	filledWidth := int(math.Ceil(float64(dwnProgress) / float64(rs.ContentLength()) * float64(barWidth)))
 	unfilledWidth := max(barWidth-filledWidth, 0)
+	// TODO filledWidth is not correct
 
 	tm.Print(tm.BackgroundRGB(strings.Repeat(" ", filledWidth), fr, fg, fb))
 	tm.Print(tm.BackgroundRGB(strings.Repeat(" ", unfilledWidth), br, bg, bb))
