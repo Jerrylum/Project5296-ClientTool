@@ -141,7 +141,7 @@ func (dwn *Downloader) Download(seg *ResourceSegment) DownloadResult {
 		if n > 0 {
 			seg.WriteAt(buf[:n], int64(offset))
 			offset += uint64(n)
-			// fmt.Println(n) // TODO telemetry
+			telemetry.ReportResourceSegmentProgress(seg, offset)
 		}
 
 		if offset >= seg.to {
