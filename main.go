@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"sort"
 	"strings"
@@ -33,7 +34,7 @@ func DownloadResources(downloaders DownloaderCluster, requests ResourceRequestLi
 	/// Calculate the chunk size for each downloader
 	/////////////////////////
 
-	chunkSize := requests.TotalContentLength() / uint64(len(downloaders))
+	chunkSize := uint64(math.Ceil(float64(requests.TotalContentLength()) / float64(len(downloaders))))
 
 	/////////////////////////
 	/// Create resources and split them into segments
@@ -127,6 +128,11 @@ Each line can be one of the following formats:
 
 	if len(downloaders) == 0 {
 		fmt.Println("No downloader available")
+		os.Exit(1)
+	}
+
+	if len(availableRR) == 0 {
+		fmt.Println("No resource to download")
 		os.Exit(1)
 	}
 

@@ -31,7 +31,7 @@ func (r *Resource) SliceSegments(chunkSize uint64) {
 			maxChunkSize := min(r.contentLength, idx+chunkSize)
 			segment := ResourceSegment{resource: r, from: idx, to: maxChunkSize, ack: idx, ttl: 3, status: PENDING}
 			segments = append(segments, &segment)
-			idx += maxChunkSize
+			idx = maxChunkSize
 		}
 		r._segments = segments
 	} else {

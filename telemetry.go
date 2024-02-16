@@ -58,7 +58,7 @@ func (tel *Telemetry) Start(
 	tel.downloadersIndexMap = make(map[*Downloader]int)
 	tel.resourceColorMap = make(map[*Resource]float64)
 	tel.totalContentLength = requests.TotalContentLength()
-	tel.chunkSize = tel.totalContentLength / uint64(len(*downloaders))
+	tel.chunkSize = uint64(math.Ceil(float64(tel.totalContentLength) / float64(len(*downloaders))))
 
 	for i, d := range *downloaders {
 		tel.downloadersIndexMap[&d] = i
@@ -101,18 +101,11 @@ func (tel *Telemetry) Update() {
 	tm.Print("Resources: ")
 
 	screenWdith := tm.Width()
-	usableWidth := uint(screenWdith-11) - 3
+	usableWidth := uint(screenWdith-11) - 2
 	// usableWidth := uint(30)
 
 	for _, r := range *tel.resources {
-		rss := append([]*ResourceSegment{}, r._segments...)
-		rss = append(rss, r._writtenSegments...)
-		sort.Slice(rss, func(i, j int) bool {
-			return rss[i].from < rss[j].from
-		})
-		for _, rs := range rss {
-			tel.PrintResourceSegmentProgress(rs, usableWidth)
-		}
+		tel.PrintResourceProgress(r, usableWidth)
 	}
 
 	tm.Flush()
@@ -122,18 +115,27 @@ func (tel *Telemetry) GetDownloaderIndex(dwn *Downloader) int {
 	return tel.downloadersIndexMap[dwn]
 }
 
-func (tel *Telemetry) PrintResourceSegmentProgress(rs *ResourceSegment, usableWidth uint) {
-	rColor := tel.resourceColorMap[rs.resource]
+func (tel *Telemetry) PrintResourceProgress(r *Resource, usableWidth uint) {
+	rss := append([]*ResourceSegment{}, r._segments...)
+	rss = append(rss, r._writtenSegments...)
+	sort.Slice(rss, func(i, j int) bool {
+		return rss[i].from < rss[j].from
+	})
+	rColor := tel.resourceColorMap[r]
 
 	fr, fg, fb, _ := cc.HSVToRGB(rColor, 1, 1)
 	br, bg, bb, _ := cc.HSVToRGB(rColor, 1, 0.5)
 
-	pct := float64(rs.ContentLength()) / float64(tel.totalContentLength)
-	barWidth := int(math.Round(float64(usableWidth) * pct))
-	dwnProgress := min(rs.ack-rs.from, rs.ContentLength())
-	filledWidth := int(math.Ceil(float64(dwnProgress) / float64(rs.ContentLength()) * float64(barWidth)))
-	unfilledWidth := max(barWidth-filledWidth, 0)
+	resourceBarWidth := int(math.Round(float64(usableWidth) * float64(r.contentLength) / float64(tel.totalContentLength)))
 
-	tm.Print(tm.BackgroundRGB(strings.Repeat(" ", filledWidth), fr, fg, fb))
-	tm.Print(tm.BackgroundRGB(strings.Repeat(" ", unfilledWidth), br, bg, bb))
+	for _, rs := range rss {
+		pct := float64(rs.ContentLength()) / float64(r.contentLength)
+		barWidth := int(math.Round(float64(resourceBarWidth) * pct))
+		dwnProgress := min(rs.ack-rs.from, rs.ContentLength())
+		filledWidth := int(math.Ceil(float64(dwnProgress) / float64(rs.ContentLength()) * float64(barWidth)))
+		unfilledWidth := max(barWidth-filledWidth, 0)
+
+		tm.Print(tm.BackgroundRGB(strings.Repeat(" ", filledWidth), fr, fg, fb))
+		tm.Print(tm.BackgroundRGB(strings.Repeat(" ", unfilledWidth), br, bg, bb))
+	}
 }
