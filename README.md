@@ -1,5 +1,5 @@
 # Run
 
 ```bash
-go run . -connections 2 -proxies INSTANCES.txt -requests LINKS.txt -log logs/"$(date).log"
+go run . -connections 2 -proxies etc/INSTANCES.txt -requests etc/LINKS.txt -log logs/"$(date -Ins).log"
 ```
