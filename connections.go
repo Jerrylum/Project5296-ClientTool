@@ -134,17 +134,17 @@ func (dwn *Downloader) Download(seg *ResourceSegment) DownloadResult {
 	}
 
 	buf := make([]byte, 1024*1024*10) // 10MB buffer
-	offset := seg.from
+	seg.ack = seg.from
 	for {
 		n, err := resp.Body.Read(buf)
 
 		if n > 0 {
-			seg.WriteAt(buf[:n], int64(offset))
-			offset += uint64(n)
-			telemetry.ReportResourceSegmentProgress(seg, offset)
+			seg.WriteAt(buf[:n], int64(seg.ack))
+			seg.ack += uint64(n)
+			telemetry.ReportResourceSegmentProgress(seg)
 		}
 
-		if offset >= seg.to {
+		if seg.ack >= seg.to {
 			log.Println("Download(*ResourceSegment) break, status: READ_SUCCESS url:", seg.resource.url) // TODO telemetry
 			seg.FinishDownload()
 			return READ_SUCCESS

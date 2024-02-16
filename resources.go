@@ -29,13 +29,13 @@ func (r *Resource) SliceSegments(chunkSize uint64) {
 		segments := []*ResourceSegment{}
 		for idx := uint64(0); idx < r.contentLength; {
 			maxChunkSize := min(r.contentLength, idx+chunkSize)
-			segment := ResourceSegment{resource: r, from: idx, to: maxChunkSize, ttl: 3, status: PENDING}
+			segment := ResourceSegment{resource: r, from: idx, to: maxChunkSize, ack: 0, ttl: 3, status: PENDING}
 			segments = append(segments, &segment)
 			idx += maxChunkSize
 		}
 		r._segments = segments
 	} else {
-		segment := ResourceSegment{resource: r, from: 0, to: r.contentLength, ttl: 3, status: PENDING}
+		segment := ResourceSegment{resource: r, from: 0, to: r.contentLength, ack: 0, ttl: 3, status: PENDING}
 		r._segments = []*ResourceSegment{&segment}
 	}
 }
@@ -112,6 +112,7 @@ type ResourceSegment struct {
 	resource *Resource
 	from     uint64 // inclusive
 	to       uint64 // exclusive
+	ack      uint64 // from <= ack <= to
 	ttl      uint8
 	status   ResourceStatus
 }
@@ -181,7 +182,7 @@ func (rs *ResourceSegment) WriteAt(b []byte, off int64) (n int, err error) {
 
 func (firstHalf *ResourceSegment) Split() *ResourceSegment {
 	r := firstHalf.resource
-	middle := firstHalf.from + (firstHalf.to-firstHalf.from)/2
+	middle := firstHalf.ack + (firstHalf.to-firstHalf.ack)/2
 	end := firstHalf.to
 	secondHalf := ResourceSegment{resource: r, from: middle, to: end, ttl: 3, status: PENDING}
 	firstHalf.to = middle

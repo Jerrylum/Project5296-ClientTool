@@ -142,10 +142,10 @@ func (tel *Telemetry) GetDownloaderIndex(dwn *Downloader) int {
 	return tel.downloadersIndexMap[dwn]
 }
 
-func (tel *Telemetry) ReportResourceSegmentProgress(rs *ResourceSegment, downloadedByte uint64) {
+func (tel *Telemetry) ReportResourceSegmentProgress(rs *ResourceSegment) {
 	tel.segmentDownloadedMapMutex.Lock()
 	defer tel.segmentDownloadedMapMutex.Unlock()
-	tel.segmentDownloadedMap[rs] = downloadedByte
+	tel.segmentDownloadedMap[rs] = rs.ack - rs.from
 }
 
 func (tel *Telemetry) GetResourceSegmentProgress(rs *ResourceSegment) uint64 {
