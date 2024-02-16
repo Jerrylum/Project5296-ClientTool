@@ -29,7 +29,7 @@ func (r *Resource) SliceSegments(chunkSize uint64) {
 		segments := []*ResourceSegment{}
 		for idx := uint64(0); idx < r.contentLength; {
 			maxChunkSize := min(r.contentLength, idx+chunkSize)
-			segment := ResourceSegment{resource: r, from: idx, to: maxChunkSize, ack: 0, ttl: 3, status: PENDING}
+			segment := ResourceSegment{resource: r, from: idx, to: maxChunkSize, ack: idx, ttl: 3, status: PENDING}
 			segments = append(segments, &segment)
 			idx += maxChunkSize
 		}
@@ -121,6 +121,10 @@ func (rs *ResourceSegment) ContentLength() uint64 {
 	return rs.to - rs.from
 }
 
+func (rs *ResourceSegment) IsFinish() bool {
+	return rs.status == DOWNLOADED || rs.status == DOWNLOAD_FAILED
+}
+
 func (rs *ResourceSegment) StartDownload() {
 	if rs.status != PENDING {
 		panic("The segment is not pending")
@@ -184,7 +188,7 @@ func (firstHalf *ResourceSegment) Split() *ResourceSegment {
 	r := firstHalf.resource
 	middle := firstHalf.ack + (firstHalf.to-firstHalf.ack)/2
 	end := firstHalf.to
-	secondHalf := ResourceSegment{resource: r, from: middle, to: end, ttl: 3, status: PENDING}
+	secondHalf := ResourceSegment{resource: r, from: middle, to: end, ack: middle, ttl: 3, status: PENDING}
 	firstHalf.to = middle
 	r._segments = append(r._segments, &secondHalf)
 	return &secondHalf
@@ -192,7 +196,7 @@ func (firstHalf *ResourceSegment) Split() *ResourceSegment {
 
 func IsAllSegmentsFinished(segments []*ResourceSegment) bool {
 	for _, seg := range segments {
-		if seg.status == DOWNLOADING || seg.status == PENDING {
+		if !seg.IsFinish() {
 			return false
 		}
 	}

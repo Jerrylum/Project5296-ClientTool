@@ -141,7 +141,7 @@ func (dwn *Downloader) Download(seg *ResourceSegment) DownloadResult {
 		if n > 0 {
 			seg.WriteAt(buf[:n], int64(seg.ack))
 			seg.ack += uint64(n)
-			telemetry.ReportResourceSegmentProgress(seg)
+			// telemetry.ReportResourceSegmentProgress(seg)
 		}
 
 		if seg.ack >= seg.to {
@@ -210,22 +210,30 @@ func (dc *DownloaderCluster) Download(segments []*ResourceSegment) {
 			break
 		}
 
-		var seg *ResourceSegment
+		var seg *ResourceSegment = nil
 		if len(pendingSegQueue) != 0 {
 			seg = <-pendingSegQueue
-		} else if waitingSplitSegList.Len() != 0 {
-			firstHalf := waitingSplitSegList.Pop()
-			secondHalf := firstHalf.Split()
-			segments = append(segments, secondHalf)
-			seg = secondHalf
 		} else {
-			downloaderQueue <- dwn
-			log.Println("Download([]*ResourceSegment) idle") // TODO telemetry
-			time.Sleep(100 * time.Millisecond)
-			continue
+			for waitingSplitSegList.Len() != 0 {
+				firstHalf := waitingSplitSegList.Pop()
+				if !firstHalf.IsFinish() && firstHalf.to-firstHalf.ack > 1024 { // TODO configurable 1KB
+					secondHalf := firstHalf.Split()
+					log.Println("Split first from:", firstHalf.from, "to:", firstHalf.to, "; second from:", secondHalf.from, "to:", secondHalf.to) // TODO telemetry
+					segments = append(segments, secondHalf)
+					seg = secondHalf
+					break
+				}
+			}
+
+			if seg == nil {
+				downloaderQueue <- dwn
+				log.Println("Download([]*ResourceSegment) idle") // TODO telemetry
+				time.Sleep(100 * time.Millisecond)
+				continue
+			}
 		}
 
-		if seg.resource.isAcceptRange && seg.ContentLength() > 1024 { // TODO configurable 1KB
+		if seg.resource.isAcceptRange {
 			waitingSplitSegList.Add(seg)
 		}
 

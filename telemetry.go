@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	tm "github.com/buger/goterm"
@@ -22,11 +21,9 @@ type Telemetry struct {
 	segments            *[]*ResourceSegment
 	downloadersIndexMap map[*Downloader]int
 	// clientIpMap map[*DownloaderClient]string
-	resourceColorMap          map[*Resource]float64
-	totalContentLength        uint64
-	chunkSize                 uint64
-	segmentDownloadedMap      map[*ResourceSegment]uint64
-	segmentDownloadedMapMutex sync.Mutex
+	resourceColorMap   map[*Resource]float64
+	totalContentLength uint64
+	chunkSize          uint64
 }
 
 var telemetry Telemetry
@@ -62,7 +59,6 @@ func (tel *Telemetry) Start(
 	tel.resourceColorMap = make(map[*Resource]float64)
 	tel.totalContentLength = requests.TotalContentLength()
 	tel.chunkSize = tel.totalContentLength / uint64(len(*downloaders))
-	tel.segmentDownloadedMap = make(map[*ResourceSegment]uint64)
 
 	for i, d := range *downloaders {
 		tel.downloadersIndexMap[&d] = i
@@ -105,11 +101,12 @@ func (tel *Telemetry) Update() {
 	tm.Print("Resources: ")
 
 	screenWdith := tm.Width()
-	usableWidth := uint(screenWdith - 11)
+	usableWidth := uint(screenWdith-11) - 3
 	// usableWidth := uint(30)
 
 	for _, r := range *tel.resources {
-		rss := append(r._segments, r._writtenSegments...)
+		rss := append([]*ResourceSegment{}, r._segments...)
+		rss = append(rss, r._writtenSegments...)
 		sort.Slice(rss, func(i, j int) bool {
 			return rss[i].from < rss[j].from
 		})
@@ -121,35 +118,8 @@ func (tel *Telemetry) Update() {
 	tm.Flush()
 }
 
-// func (tel *Telemetry) AssociateClientAndIp(client *DownloaderClient, ip string) {
-// 	tel.clientIpMap[client] = ip
-// }
-
-// func (tel *Telemetry) GetDownladerIpByClient(client *DownloaderClient) string {
-// 	return tel.clientIpMap[client]
-// }
-
-// func (tel *Telemetry) GetDownloaderInfo(dwn *Downloader) string {
-// 	client := dwn.client
-// 	ip := tel.GetDownladerIpByClient(&client)
-// 	if ip == "" {
-// 		return "Unknown"
-// 	}
-// 	return fmt.Sprintf("(%d %s)", tel.GetDownloaderIndex(dwn), ip)
-// }
-
 func (tel *Telemetry) GetDownloaderIndex(dwn *Downloader) int {
 	return tel.downloadersIndexMap[dwn]
-}
-
-func (tel *Telemetry) ReportResourceSegmentProgress(rs *ResourceSegment) {
-	tel.segmentDownloadedMapMutex.Lock()
-	defer tel.segmentDownloadedMapMutex.Unlock()
-	tel.segmentDownloadedMap[rs] = rs.ack - rs.from
-}
-
-func (tel *Telemetry) GetResourceSegmentProgress(rs *ResourceSegment) uint64 {
-	return tel.segmentDownloadedMap[rs]
 }
 
 func (tel *Telemetry) PrintResourceSegmentProgress(rs *ResourceSegment, usableWidth uint) {
@@ -160,10 +130,9 @@ func (tel *Telemetry) PrintResourceSegmentProgress(rs *ResourceSegment, usableWi
 
 	pct := float64(rs.ContentLength()) / float64(tel.totalContentLength)
 	barWidth := int(math.Round(float64(usableWidth) * pct))
-	dwnProgress := min(tel.GetResourceSegmentProgress(rs), rs.ContentLength())
+	dwnProgress := min(rs.ack-rs.from, rs.ContentLength())
 	filledWidth := int(math.Ceil(float64(dwnProgress) / float64(rs.ContentLength()) * float64(barWidth)))
 	unfilledWidth := max(barWidth-filledWidth, 0)
-	// TODO filledWidth is not correct
 
 	tm.Print(tm.BackgroundRGB(strings.Repeat(" ", filledWidth), fr, fg, fb))
 	tm.Print(tm.BackgroundRGB(strings.Repeat(" ", unfilledWidth), br, bg, bb))
