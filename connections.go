@@ -221,6 +221,7 @@ func (dc *DownloaderCluster) Download(segments []*ResourceSegment) {
 					secondHalf := firstHalf.Split()
 					log.Println("Split first from:", firstHalf.from, "to:", firstHalf.to, "; second from:", secondHalf.from, "to:", secondHalf.to) // TODO telemetry
 					segments = append(segments, secondHalf)
+					telemetry.ReportNewSegmentAdded(secondHalf)
 					seg = secondHalf
 					break
 				}
