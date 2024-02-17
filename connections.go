@@ -109,6 +109,8 @@ func (dwn *Downloader) FetchResourceRequest(userRequest UserRequest) ResourceReq
 }
 
 func (dwn *Downloader) Download(seg *ResourceSegment) DownloadResult {
+	telemetry.ReportDownloadingSegment(dwn, seg)
+
 	seg.StartDownload()
 
 	req, err := http.NewRequest("GET", seg.resource.url, nil)
@@ -141,7 +143,6 @@ func (dwn *Downloader) Download(seg *ResourceSegment) DownloadResult {
 		if n > 0 {
 			seg.WriteAt(buf[:n], int64(seg.ack))
 			seg.ack += uint64(n)
-			// telemetry.ReportResourceSegmentProgress(seg)
 		}
 
 		if seg.ack >= seg.to {
@@ -164,7 +165,7 @@ func (dwn *Downloader) Download(seg *ResourceSegment) DownloadResult {
 	}
 }
 
-type DownloaderCluster []Downloader
+type DownloaderCluster []*Downloader
 
 func (dc *DownloaderCluster) FetchResourceRequests(userRequests []UserRequest) ResourceRequestList {
 	resourceRequests := make(ResourceRequestList, len(userRequests))
@@ -199,7 +200,7 @@ func (dc *DownloaderCluster) Download(segments []*ResourceSegment) {
 	downloaderQueue := make(chan *Downloader, len(*dc))
 	for _, downloader := range *dc {
 		putDownloader := downloader
-		downloaderQueue <- &putDownloader
+		downloaderQueue <- putDownloader
 	}
 
 	for {
@@ -265,7 +266,7 @@ func (ipList *IpList) ToDownloaderCluster(numOfConn int) DownloaderCluster {
 		panic("No proxy server or invalid number of connections provided")
 	}
 
-	var downloaders []Downloader
+	var downloaders []*Downloader
 	var i = numOfConn
 
 	for {
@@ -356,7 +357,7 @@ func (rrl *ResourceRequestList) ToResources(chunkSize uint64) []*Resource {
 	return resources
 }
 
-func ConstructDownloaderFromIp(ip string) Downloader {
+func ConstructDownloaderFromIp(ip string) *Downloader {
 	url_i := url.URL{}
 	url_proxy, _ := url_i.Parse("http://" + ip + ":3000")
 
@@ -367,5 +368,5 @@ func ConstructDownloaderFromIp(ip string) Downloader {
 	client := &DownloaderClientImpl{}
 	client.Transport = transport
 
-	return Downloader{client: client}
+	return &Downloader{client: client}
 }

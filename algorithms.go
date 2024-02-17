@@ -1,12 +1,12 @@
 package main
 
-func ConsumeJobs[T any](workers []T, jobs []func(worker *T)) {
+func ConsumeJobs[T any](workers []*T, jobs []func(worker *T)) {
 	consumed := 0
 
 	workerQueue := make(chan *T, len(workers))
 	for _, worker := range workers {
 		putWorker := worker
-		workerQueue <- &putWorker
+		workerQueue <- putWorker
 	}
 
 	jobsQueue := make(chan *func(worker *T), len(jobs))
