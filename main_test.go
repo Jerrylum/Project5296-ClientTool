@@ -90,3 +90,29 @@ func TestDownloadResources(t *testing.T) {
 		t.Errorf("Expected %d, got %d", 1, len(testResource[1]._segments))
 	}
 }
+
+func TestConsumeJobs(t *testing.T) {
+	type StubWorker struct {
+		flag bool
+	}
+
+	workers := make([]*StubWorker, 1000)
+	for i := range workers {
+		workers[i] = &StubWorker{flag: false}
+	}
+
+	jobs := make([]func(worker *StubWorker), 1000)
+	for i := range jobs {
+		jobs[i] = func(w *StubWorker) {
+			w.flag = true
+		}
+	}
+
+	ConsumeJobs(workers, jobs)
+
+	for _, worker := range workers {
+		if !worker.flag {
+			t.Errorf("Expected %v, got %v", true, worker.flag)
+		}
+	}
+}
