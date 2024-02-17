@@ -28,14 +28,14 @@ type Telemetry struct {
 	segments            *[]*ResourceSegment
 	downloadersIndexMap map[*Downloader]int
 	// clientIpMap map[*DownloaderClient]string
-	resourceColorMap        map[*Resource]float64
-	resourceIdMap           map[*Resource]uint
-	segmentIdMap            map[*ResourceSegment]uint
-	resourceSegmentCountMap map[*Resource]uint
-	clientSegmentMapMutex   *sync.Mutex
-	clientSegmentMap        map[*Downloader]*ResourceSegment
-	totalContentLength      uint64
-	chunkSize               uint64
+	resourceColorMap          map[*Resource]float64
+	resourceIdMap             map[*Resource]uint
+	segmentIdMap              map[*ResourceSegment]uint
+	resourceSegmentCountMap   map[*Resource]uint
+	downloaderSegmentMapMutex *sync.Mutex
+	downloaderSegmentMap      map[*Downloader][]*ResourceSegment
+	totalContentLength        uint64
+	chunkSize                 uint64
 }
 
 var telemetry Telemetry
@@ -72,10 +72,10 @@ func (tel *Telemetry) Start(
 	tel.resourceIdMap = make(map[*Resource]uint)
 	tel.segmentIdMap = make(map[*ResourceSegment]uint)
 	tel.resourceSegmentCountMap = make(map[*Resource]uint)
-	tel.clientSegmentMapMutex = &sync.Mutex{}
-	tel.clientSegmentMapMutex.Lock()
-	tel.clientSegmentMap = make(map[*Downloader]*ResourceSegment)
-	defer tel.clientSegmentMapMutex.Unlock()
+	tel.downloaderSegmentMapMutex = &sync.Mutex{}
+	tel.downloaderSegmentMapMutex.Lock()
+	tel.downloaderSegmentMap = make(map[*Downloader][]*ResourceSegment)
+	defer tel.downloaderSegmentMapMutex.Unlock()
 	tel.totalContentLength = requests.TotalContentLength()
 	tel.chunkSize = uint64(math.Ceil(float64(tel.totalContentLength) / float64(len(*downloaders))))
 
@@ -138,35 +138,50 @@ func (tel *Telemetry) Update() {
 	tm.Print("Downloaders: ")
 	for i, dwn := range *tel.downloaders {
 		tm.MoveCursor(1, i+4)
-		tm.Printf("Downloader %2d - ", i)
+		tm.Printf("#%-2d - ", i)
 
-		tel.clientSegmentMapMutex.Lock()
-		rs := tel.clientSegmentMap[dwn]
-		tel.clientSegmentMapMutex.Unlock()
-		if rs != nil {
+		tel.downloaderSegmentMapMutex.Lock()
+
+		arr := tel.downloaderSegmentMap[dwn]
+		for _, rs := range arr {
+			color := GetTelemetryProgressBarColor(tel.resourceColorMap[rs.resource])
 			r := rs.resource
-			rColor := tel.resourceColorMap[r]
+			// rColor := tel.resourceColorMap[r]
 
-			fr, fg, fb, _ := cc.HSVToRGB(rColor, 1, 1)
-			br, bg, bb, _ := cc.HSVToRGB(rColor, 1, 0.5)
+			// fr, fg, fb, _ := cc.HSVToRGB(rColor, 1, 1)
+			// br, bg, bb, _ := cc.HSVToRGB(rColor, 1, 0.5)
 
-			// resourceBarWidth := int(math.Round(float64(usableWidth) * float64(r.contentLength) / float64(tel.totalContentLength)))
-			resourceBarWidth := usableWidth / 2
+			resourceBarWidth := uint(math.Round(float64(usableWidth) * float64(r.contentLength) / float64(tel.totalContentLength)))
+			// // resourceBarWidth := usableWidth / 2
 
-			pct := float64(rs.ContentLength()) / float64(r.contentLength)
-			barWidth := int(math.Round(float64(resourceBarWidth) * pct))
-			dwnProgress := min(rs.ack-rs.from, rs.ContentLength())
-			filledWidth := int(math.Ceil(float64(dwnProgress) / float64(rs.ContentLength()) * float64(barWidth)))
-			unfilledWidth := max(barWidth-filledWidth, 0)
+			// pct := float64(rs.ContentLength()) / float64(r.contentLength)
+			// barWidth := int(math.Round(float64(resourceBarWidth) * pct))
+			// dwnProgress := min(rs.ack-rs.from, rs.ContentLength())
+			// filledWidth := int(math.Ceil(float64(dwnProgress) / float64(rs.ContentLength()) * float64(barWidth)))
+			// unfilledWidth := max(barWidth-filledWidth, 0)
 
-			tm.Print(tm.BackgroundRGB(strings.Repeat(" ", filledWidth), fr, fg, fb))
-			tm.Print(tm.BackgroundRGB(strings.Repeat(" ", unfilledWidth), br, bg, bb))
-		} else {
-			// tm.Print("Idle")
-			tm.Printf("Idle %d", len((tel.clientSegmentMap)))
-
+			// tm.Print(tm.BackgroundRGB(strings.Repeat(" ", filledWidth), fr, fg, fb))
+			// tm.Print(tm.BackgroundRGB(strings.Repeat(" ", unfilledWidth), br, bg, bb))
+			tel.PrintResourceSegmentProgress(rs, &color, resourceBarWidth)
 		}
 
+		tel.downloaderSegmentMapMutex.Unlock()
+		// rs := tel.downloaderSegmentMap[dwn]
+		// if rs != nil {
+		// } else {
+		// 	// tm.Print("Idle")
+		// 	// tm.Printf("Idle %d", len((tel.downloaderSegmentMap)))
+		// }
+
+		if len(arr) != 0 {
+			lastRs := arr[len(arr)-1]
+			pct := float64(lastRs.ack-lastRs.from) / float64(lastRs.ContentLength())
+			info := fmt.Sprintf("Downloading %d_%d (%.2f%%)", tel.resourceIdMap[lastRs.resource], tel.segmentIdMap[lastRs], pct*100)
+			// 28
+			w := tm.Width()
+			tm.MoveCursor(w - 28, i+4)
+			tm.Printf("%28s", info)
+		}
 	}
 
 	tm.Flush()
@@ -209,14 +224,18 @@ func (tel *Telemetry) PrintResourceProgress(r *Resource, usableWidth uint) {
 }
 
 func (tel *Telemetry) ReportDownloadingSegment(dwn *Downloader, rs *ResourceSegment) {
-	tel.clientSegmentMapMutex.Lock()
-	defer tel.clientSegmentMapMutex.Unlock()
-	tel.clientSegmentMap[dwn] = rs
+	tel.downloaderSegmentMapMutex.Lock()
+	defer tel.downloaderSegmentMapMutex.Unlock()
+	if tel.downloaderSegmentMap[dwn] == nil {
+		tel.downloaderSegmentMap[dwn] = []*ResourceSegment{rs}
+	} else {
+		tel.downloaderSegmentMap[dwn] = append(tel.downloaderSegmentMap[dwn], rs)
+	}
 }
 
 func GetTelemetryProgressBarColor(themeColor float64) TelemetryProgressBarColor {
 	fr, fg, fb, _ := cc.HSVToRGB(themeColor, 1, 1)
-	br, bg, bb, _ := cc.HSVToRGB(themeColor, 1, 0.5)
+	br, bg, bb, _ := cc.HSVToRGB(themeColor, 1, 0.2)
 	return TelemetryProgressBarColor{
 		fr: fr,
 		fg: fg,
@@ -227,7 +246,7 @@ func GetTelemetryProgressBarColor(themeColor float64) TelemetryProgressBarColor 
 }
 
 func (tel *Telemetry) PrintResourceSegmentProgress(rs *ResourceSegment, color *TelemetryProgressBarColor, resourceBarWidth uint) {
-	idStr := fmt.Sprintf("%d-%d", tel.resourceIdMap[rs.resource], tel.segmentIdMap[rs])
+	idStr := fmt.Sprintf("%d_%d", tel.resourceIdMap[rs.resource], tel.segmentIdMap[rs])
 
 	r := rs.resource
 	pct := float64(rs.ContentLength()) / float64(r.contentLength)
