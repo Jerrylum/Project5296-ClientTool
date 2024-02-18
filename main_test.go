@@ -40,8 +40,8 @@ func TestToUserRequests(t *testing.T) {
 		"http://16.163.217.155/download/200.jpg > ./etc/200_2.jpg"}
 
 	testUserResuestResultUrl := []string{"http://16.163.217.155/download/200.jpg", "http://16.163.217.155/download/200.jpg", "http://16.163.217.155/download/200.jpg"}
-	Dest, _ := filepath.Abs("")
-	testUserResuestResultDest := []string{Dest + "/200.jpg", Dest + "\\200_1.jpg", Dest + "\\etc\\200_2.jpg"}
+	dest, _ := filepath.Abs("")
+	testUserResuestResultDest := []string{dest + "/200.jpg", dest + "/200_1.jpg", dest + "/etc/200_2.jpg"}
 
 	testUserRequestStr := OriginalUserRequestList(testUserRequestSpec)
 
