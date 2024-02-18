@@ -114,7 +114,13 @@ func (dwn *Downloader) Download(seg *ResourceSegment) DownloadResult {
 	seg.StartDownload()
 
 	req, err := http.NewRequest("GET", seg.resource.url, nil)
-	req.Header.Add("Range", "bytes="+fmt.Sprint(seg.from)+"-"+fmt.Sprint(seg.to-2))
+	// From ack to to-1, try to continue download from failed point
+	if seg.resource.isAcceptRange {
+		seg.from = seg.ack
+		req.Header.Add("Range", "bytes="+fmt.Sprint(seg.from)+"-"+fmt.Sprint(seg.to-1))
+	} else {
+		seg.ack = 0
+	}
 
 	if err != nil {
 		panic(err)
@@ -136,7 +142,6 @@ func (dwn *Downloader) Download(seg *ResourceSegment) DownloadResult {
 	}
 
 	buf := make([]byte, 1024*1024*10) // 10MB buffer
-	seg.ack = seg.from
 	for {
 		n, err := resp.Body.Read(buf)
 
