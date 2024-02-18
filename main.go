@@ -25,48 +25,6 @@ func ReadFileByLine(path string) []string {
 	return rtn
 }
 
-func DownloadResources(downloaders DownloaderCluster, requests ResourceRequestList) []*Resource {
-	if len(downloaders) == 0 {
-		panic("No downloader provided")
-	}
-
-	/////////////////////////
-	/// Calculate the chunk size for each downloader
-	/////////////////////////
-
-	chunkSize := uint64(math.Ceil(float64(requests.TotalContentLength()) / float64(len(downloaders))))
-
-	/////////////////////////
-	/// Create resources and split them into segments
-	/////////////////////////
-
-	resources := requests.ToResources(chunkSize)
-
-	/////////////////////////
-	/// Sort the segments by the size from largest to smallest
-	/////////////////////////
-
-	segments := []*ResourceSegment{}
-
-	for _, resource := range resources {
-		segments = append(segments, resource._segments...)
-	}
-
-	// We want to download the largest segments first to better balance the load among the downloaders
-	sort.Slice(segments, func(i, j int) bool {
-		return segments[i].ContentLength() > segments[j].ContentLength()
-	})
-
-	/////////////////////////
-	/// Download the segments
-	/////////////////////////
-
-	telemetry.Start(&downloaders, &requests, &resources, &segments)
-	downloaders.Download(segments)
-
-	return resources
-}
-
 func IsAllResourceRequestAvailable(requests ResourceRequestList) bool {
 	for _, request := range requests {
 		if request.status != AVAILABLE {
@@ -127,21 +85,25 @@ Each line can be one of the following formats:
 	numOfConn := *numOfConnRaw
 	downloaders := proxyIps.ToDownloaderCluster(numOfConn)
 	userRequests := originalUserRequests.ToUserRequests()
-	resourceRequests := downloaders.FetchResourceRequests(userRequests)
+	allResourceRequests := downloaders.FetchResourceRequests(userRequests)
 
-	availableRR := []ResourceRequest{}
+	/////////////////////////
+	/// Check if all resources are available
+	/////////////////////////
+
+	resourceRequests := ResourceRequestList{}
 
 	if len(downloaders) == 0 {
 		fmt.Println("No downloader available")
 		os.Exit(1)
 	}
 
-	if !IsAllResourceRequestAvailable(resourceRequests) {
+	if !IsAllResourceRequestAvailable(allResourceRequests) {
 		fmt.Println("The following resources are not available.")
 
-		for _, rr := range resourceRequests {
+		for _, rr := range allResourceRequests {
 			if rr.status == AVAILABLE {
-				availableRR = append(availableRR, rr)
+				resourceRequests = append(resourceRequests, rr)
 			} else {
 				switch rr.status {
 				case NOT_FOUND:
@@ -165,19 +127,60 @@ Each line can be one of the following formats:
 			}
 		}
 	} else {
-		availableRR = resourceRequests
+		resourceRequests = allResourceRequests
 	}
 
-	if len(availableRR) == 0 {
+	if len(resourceRequests) == 0 {
 		fmt.Println("No resource to download")
 		os.Exit(1)
 	}
 
+	/////////////////////////
+	/// Init telemetry and start download process
+	/////////////////////////
+
 	telemetry.Init(*logFilePathRaw)
 
-	DownloadResources(downloaders, availableRR)
+	/////////////////////////
+	/// Calculate the chunk size for each downloader
+	/////////////////////////
+
+	chunkSize := uint64(math.Ceil(float64(resourceRequests.TotalContentLength()) / float64(len(downloaders))))
+
+	/////////////////////////
+	/// Create resources and split them into segments
+	/////////////////////////
+
+	resources := resourceRequests.ToResources(chunkSize)
+
+	/////////////////////////
+	/// Sort the segments by the size from largest to smallest
+	/////////////////////////
+
+	segments := []*ResourceSegment{}
+
+	for _, resource := range resources {
+		segments = append(segments, resource._segments...)
+	}
+
+	// We want to download the largest segments first to better balance the load among the downloaders
+	sort.Slice(segments, func(i, j int) bool {
+		return segments[i].ContentLength() > segments[j].ContentLength()
+	})
+
+	/////////////////////////
+	/// Download the segments
+	/////////////////////////
+
+	telemetry.Start(&downloaders, &resourceRequests, &resources, &segments)
+
+	downloaders.Download(segments)
 
 	telemetry.Update()
+
+	/////////////////////////
+	/// Print the report
+	/////////////////////////
 
 	fmt.Println("\n\nDownload completed")
 

@@ -161,6 +161,40 @@ func (tel *Telemetry) PrintReport() {
 	fmt.Println()
 	fmt.Println("# Report")
 	fmt.Println()
+	fmt.Println("## Resources")
+	fmt.Println()
+	for _, r := range *tel.resources {
+		fmt.Printf("### Resources #%d\n", tel.resourceIdMap[r])
+
+		allSegs := append([]*ResourceSegment{}, r._segments...)
+		allSegs = append(allSegs, r._writtenSegments...)
+
+		sort.Slice(allSegs, func(i, j int) bool {
+			return allSegs[i].from < allSegs[j].from
+		})
+
+		usableWidth := uint(tm.Width() - 3)
+		remainingWidth := int(usableWidth)
+		fmt.Println("#### Info")
+		fmt.Printf(" - Url: %s\n", r.url)
+		fmt.Printf(" - Length: %d\n", r.contentLength)
+		fmt.Printf(" - Is Accept Range: %t\n", r.isAcceptRange)
+		fmt.Println("#### Segments")
+		fmt.Println("```")
+		fmt.Print("|")
+		for _, rs := range allSegs {
+			pct := float64(rs.ContentLength()) / float64(r.contentLength)
+			barWidth := int(math.Round(float64(usableWidth) * pct))
+			barWidth = max(min(barWidth, remainingWidth), 0)
+			remainingWidth -= barWidth
+			if barWidth > 1 {
+				fmt.Printf(strings.Repeat("-", barWidth-1) + "|")
+			}
+		}
+		fmt.Println()
+		fmt.Println("```")
+	}
+	fmt.Println()
 	fmt.Println("## Downloaders")
 	fmt.Println()
 	for _, dwn := range *tel.downloaders {
