@@ -155,6 +155,32 @@ func (tel *Telemetry) Update() {
 	tm.Flush()
 }
 
+func (tel *Telemetry) PrintReport() {
+	fmt.Println("")
+	fmt.Println("# Report")
+	fmt.Println("")
+	fmt.Println("## Downloaders")
+	fmt.Println("")
+	// for dwn, arr := range tel.downloaderSegmentMap {
+	for _, dwn := range *tel.downloaders {
+		arr := tel.downloaderSegmentMap[dwn]
+		dwnIndex := tel.GetDownloaderIndex(dwn)
+		fmt.Printf("### Downloader #%d \n", dwnIndex)
+		for _, runtime := range arr {
+			rs := runtime.rs
+			idStr := fmt.Sprintf("%d_%d", tel.resourceIdMap[rs.resource], tel.segmentIdMap[rs])
+			pct := float64(rs.ack-rs.from) / float64(rs.ContentLength())
+			if pct >= 1 {
+				fmt.Printf(" - Segment#%s range=%d~%d len=%d received=%d (+%d %.2f%%)\n", idStr, rs.from, rs.to, rs.ContentLength(), rs.ack-rs.from, rs.ack-rs.to, pct*100)
+			} else {
+				fmt.Printf(" - Segment#%s range=%d~%d length=%d received=%d (%d %.2f%%)\n", idStr, rs.from, rs.to, rs.ContentLength(), rs.ack-rs.from, rs.ack-rs.to, pct*100)
+				// fmt.Printf(" - Segment#%s range=%d~%d (total %d) ack=%d (%d %.2f%%)\n", idStr, rs.from, rs.to, rs.ContentLength(), rs.ack, rs.ack-rs.to, pct*100)
+			}
+		}
+	}
+	fmt.Println("")
+}
+
 func (tel *Telemetry) GetDownloaderIndex(dwn *Downloader) int {
 	return tel.downloadersIndexMap[dwn]
 }

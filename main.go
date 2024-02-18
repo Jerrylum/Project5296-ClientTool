@@ -175,9 +175,11 @@ Each line can be one of the following formats:
 
 	telemetry.Init(*logFilePathRaw)
 
-	// fmt.Println(availableRR)
-
 	DownloadResources(downloaders, availableRR)
 
 	telemetry.Update()
+
+	fmt.Println("\n\nDownload completed")
+
+	telemetry.PrintReport()
 }
