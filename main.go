@@ -67,6 +67,16 @@ func DownloadResources(downloaders DownloaderCluster, requests ResourceRequestLi
 	return resources
 }
 
+func IsAllResourceRequestAvailable(requests ResourceRequestList) bool {
+	for _, request := range requests {
+		if request.status != AVAILABLE {
+			return false
+		}
+	}
+
+	return true
+}
+
 func main() {
 	proxyListPathRaw := flag.String("proxies", "", "The path to a file with a list of proxy server ips, separated by linefeed")
 	requestListPathRaw := flag.String("requests", "", `The path to a file with a list of download requests, separated by linefeed
@@ -120,15 +130,42 @@ Each line can be one of the following formats:
 	resourceRequests := downloaders.FetchResourceRequests(userRequests)
 
 	availableRR := []ResourceRequest{}
-	for _, rr := range resourceRequests {
-		if rr.status == AVAILABLE {
-			availableRR = append(availableRR, rr)
-		}
-	}
 
 	if len(downloaders) == 0 {
 		fmt.Println("No downloader available")
 		os.Exit(1)
+	}
+
+	if !IsAllResourceRequestAvailable(resourceRequests) {
+		fmt.Println("The following resources are not available.")
+
+		for _, rr := range resourceRequests {
+			if rr.status == AVAILABLE {
+				availableRR = append(availableRR, rr)
+			} else {
+				switch rr.status {
+				case NOT_FOUND:
+					fmt.Printf("Status code != 200: %s\n", rr.url)
+				case CONNECTION_TIMEOUT:
+					fmt.Printf("Connection timeout: %s\n", rr.url)
+				case CONNECTION_REFUSED:
+					fmt.Printf("Connection refused: %s\n", rr.url)
+				}
+			}
+		}
+
+		for {
+			fmt.Print("Do you want to continue downloading the available resources (y/n)? ")
+			input := ""
+			fmt.Scanln(&input)
+			if strings.ToLower(input) == "y" {
+				break
+			} else if strings.ToLower(input) == "n" {
+				os.Exit(0)
+			}
+		}
+	} else {
+		availableRR = resourceRequests
 	}
 
 	if len(availableRR) == 0 {
