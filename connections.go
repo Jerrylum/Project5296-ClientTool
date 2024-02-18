@@ -207,7 +207,7 @@ func (dc *DownloaderCluster) Download(segments []*ResourceSegment) {
 		dwn := <-downloaderQueue
 
 		// break if all segments are downloaded or failed
-		if IsAllSegmentsFinished(segments) {
+		if IsAllSegmentsSettled(segments) {
 			break
 		}
 
@@ -217,7 +217,7 @@ func (dc *DownloaderCluster) Download(segments []*ResourceSegment) {
 		} else {
 			for waitingSplitSegList.Len() != 0 {
 				firstHalf := waitingSplitSegList.Pop()
-				if !firstHalf.IsFinish() && firstHalf.to-firstHalf.ack > 1024 { // TODO configurable 1KB
+				if !firstHalf.IsSettled() && firstHalf.to-firstHalf.ack > 1024 { // TODO configurable 1KB
 					secondHalf := firstHalf.Split()
 					log.Println("Split first from:", firstHalf.from, "to:", firstHalf.to, "; second from:", secondHalf.from, "to:", secondHalf.to) // TODO telemetry
 					segments = append(segments, secondHalf)

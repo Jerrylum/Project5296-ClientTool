@@ -121,7 +121,7 @@ func (rs *ResourceSegment) ContentLength() uint64 {
 	return rs.to - rs.from
 }
 
-func (rs *ResourceSegment) IsFinish() bool {
+func (rs *ResourceSegment) IsSettled() bool {
 	return rs.status == DOWNLOADED || rs.status == DOWNLOAD_FAILED
 }
 
@@ -194,9 +194,9 @@ func (firstHalf *ResourceSegment) Split() *ResourceSegment {
 	return &secondHalf
 }
 
-func IsAllSegmentsFinished(segments []*ResourceSegment) bool {
+func IsAllSegmentsSettled(segments []*ResourceSegment) bool {
 	for _, seg := range segments {
-		if !seg.IsFinish() {
+		if !seg.IsSettled() {
 			return false
 		}
 	}
