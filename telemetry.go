@@ -21,6 +21,11 @@ type TelemetryProgressBarColor struct {
 	fr, fg, fb, br, bg, bb uint8
 }
 
+type TelemetryResourceSegmentRuntime struct {
+	rs  *ResourceSegment
+	ttl uint8
+}
+
 type Telemetry struct {
 	downloaders               *DownloaderCluster
 	requests                  *ResourceRequestList
@@ -32,7 +37,7 @@ type Telemetry struct {
 	segmentIdMap              map[*ResourceSegment]uint
 	resourceSegmentCountMap   map[*Resource]uint
 	downloaderSegmentMapMutex *sync.Mutex
-	downloaderSegmentMap      map[*Downloader][]*ResourceSegment
+	downloaderSegmentMap      map[*Downloader][]*TelemetryResourceSegmentRuntime
 	totalContentLength        uint64
 	chunkSize                 uint64
 }
@@ -73,7 +78,7 @@ func (tel *Telemetry) Start(
 	tel.resourceSegmentCountMap = make(map[*Resource]uint)
 	tel.downloaderSegmentMapMutex = &sync.Mutex{}
 	tel.downloaderSegmentMapMutex.Lock()
-	tel.downloaderSegmentMap = make(map[*Downloader][]*ResourceSegment)
+	tel.downloaderSegmentMap = make(map[*Downloader][]*TelemetryResourceSegmentRuntime)
 	defer tel.downloaderSegmentMapMutex.Unlock()
 	tel.totalContentLength = requests.TotalContentLength()
 	tel.chunkSize = uint64(math.Ceil(float64(tel.totalContentLength) / float64(len(*downloaders))))
@@ -126,7 +131,8 @@ func (tel *Telemetry) Update() {
 		tel.downloaderSegmentMapMutex.Lock()
 
 		arr := tel.downloaderSegmentMap[dwn]
-		for _, rs := range arr {
+		for _, runtime := range arr {
+			rs := runtime.rs
 			color := GetTelemetryProgressBarColor(tel.resourceColorMap[rs.resource])
 			r := rs.resource
 
@@ -137,7 +143,7 @@ func (tel *Telemetry) Update() {
 		tel.downloaderSegmentMapMutex.Unlock()
 
 		if len(arr) != 0 {
-			lastRs := arr[len(arr)-1]
+			lastRs := arr[len(arr)-1].rs
 			pct := float64(lastRs.ack-lastRs.from) / float64(lastRs.ContentLength())
 			info := fmt.Sprintf("Downloading %d_%d (%.2f%%)", tel.resourceIdMap[lastRs.resource], tel.segmentIdMap[lastRs], pct*100)
 			w := tm.Width()
@@ -176,10 +182,27 @@ func (tel *Telemetry) PrintResourceProgress(r *Resource, usableWidth uint) {
 func (tel *Telemetry) ReportDownloadingSegment(dwn *Downloader, rs *ResourceSegment) {
 	tel.downloaderSegmentMapMutex.Lock()
 	defer tel.downloaderSegmentMapMutex.Unlock()
+
+	for _, arr := range tel.downloaderSegmentMap {
+		for _, runtime := range arr {
+			if runtime.rs == rs {
+				// copy
+				runtime.rs = &ResourceSegment{
+					resource: rs.resource,
+					from:     rs.from,
+					to:       rs.to,
+					ack:      rs.ack,
+					ttl:      rs.ttl,
+					status:   rs.status}
+				break
+			}
+		}
+	}
+
 	if tel.downloaderSegmentMap[dwn] == nil {
-		tel.downloaderSegmentMap[dwn] = []*ResourceSegment{rs}
+		tel.downloaderSegmentMap[dwn] = []*TelemetryResourceSegmentRuntime{{rs: rs, ttl: rs.ttl}}
 	} else {
-		tel.downloaderSegmentMap[dwn] = append(tel.downloaderSegmentMap[dwn], rs)
+		tel.downloaderSegmentMap[dwn] = append(tel.downloaderSegmentMap[dwn], &TelemetryResourceSegmentRuntime{rs: rs, ttl: rs.ttl})
 	}
 }
 

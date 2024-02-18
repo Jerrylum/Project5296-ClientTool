@@ -141,4 +141,6 @@ Each line can be one of the following formats:
 	// fmt.Println(availableRR)
 
 	DownloadResources(downloaders, availableRR)
+
+	telemetry.Update()
 }
