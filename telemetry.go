@@ -22,8 +22,10 @@ type TelemetryProgressBarColor struct {
 }
 
 type TelemetryResourceSegmentRuntime struct {
-	rs  *ResourceSegment
-	ttl uint8
+	rs          *ResourceSegment
+	ttl         uint8
+	startTime   time.Time
+	settledTime time.Time
 }
 
 type Telemetry struct {
@@ -156,38 +158,72 @@ func (tel *Telemetry) Update() {
 }
 
 func (tel *Telemetry) PrintReport() {
-	fmt.Println("")
+	fmt.Println()
 	fmt.Println("# Report")
-	fmt.Println("")
+	fmt.Println()
 	fmt.Println("## Downloaders")
-	fmt.Println("")
-	// for dwn, arr := range tel.downloaderSegmentMap {
+	fmt.Println()
 	for _, dwn := range *tel.downloaders {
 		arr := tel.downloaderSegmentMap[dwn]
-		dwnIndex := tel.GetDownloaderIndex(dwn)
+		dwnIndex := tel.downloadersIndexMap[dwn]
 		fmt.Printf("### Downloader #%d \n", dwnIndex)
+		fmt.Println("#### Segments")
+		totalRecived := uint64(0)
 		for _, runtime := range arr {
 			rs := runtime.rs
 			idStr := fmt.Sprintf("%d_%d", tel.resourceIdMap[rs.resource], tel.segmentIdMap[rs])
 			pct := float64(rs.ack-rs.from) / float64(rs.ContentLength())
-			if pct >= 1 {
-				fmt.Printf(" - Segment#%s range=%d~%d len=%d received=%d (+%d %.2f%%)\n", idStr, rs.from, rs.to, rs.ContentLength(), rs.ack-rs.from, rs.ack-rs.to, pct*100)
-			} else {
-				fmt.Printf(" - Segment#%s range=%d~%d length=%d received=%d (%d %.2f%%)\n", idStr, rs.from, rs.to, rs.ContentLength(), rs.ack-rs.from, rs.ack-rs.to, pct*100)
-				// fmt.Printf(" - Segment#%s range=%d~%d (total %d) ack=%d (%d %.2f%%)\n", idStr, rs.from, rs.to, rs.ContentLength(), rs.ack, rs.ack-rs.to, pct*100)
+			fmt.Printf(" - Segment#%s range=%d~%d len=%d received=%d (%s %.2f%%)", idStr, rs.from, rs.to, rs.ContentLength(), rs.ack-rs.from, SignedInt(int64(rs.ack)-int64(rs.to)), pct*100)
+			if rs.status == DOWNLOAD_FAILED {
+				fmt.Printf(" FAILED (ttl=%d)", rs.ttl)
 			}
-		}
-	}
-	fmt.Println("")
-}
+			fmt.Println()
 
-func (tel *Telemetry) GetDownloaderIndex(dwn *Downloader) int {
-	return tel.downloadersIndexMap[dwn]
+			totalRecived += rs.ack - rs.from
+		}
+		fmt.Println("#### Summary")
+		fmt.Printf(" - Recived %d duty=%s\n", totalRecived, SignedInt(int64(totalRecived)-int64(tel.chunkSize)))
+		fmt.Printf(" - Time used: %dms\n", arr[len(arr)-1].settledTime.Sub(arr[0].startTime).Milliseconds())
+		fmt.Println()
+	}
+	fmt.Println()
 }
 
 func (tel *Telemetry) ReportNewSegmentAdded(rs *ResourceSegment) {
 	tel.segmentIdMap[rs] = tel.resourceSegmentCountMap[rs.resource]
 	tel.resourceSegmentCountMap[rs.resource]++
+}
+
+func (tel *Telemetry) ReportDownloadingSegment(dwn *Downloader, rs *ResourceSegment) {
+	tel.downloaderSegmentMapMutex.Lock()
+	defer tel.downloaderSegmentMapMutex.Unlock()
+
+	if tel.downloaderSegmentMap[dwn] == nil {
+		tel.downloaderSegmentMap[dwn] = []*TelemetryResourceSegmentRuntime{{rs: rs, ttl: rs.ttl, startTime: time.Now()}}
+	} else {
+		tel.downloaderSegmentMap[dwn] = append(tel.downloaderSegmentMap[dwn], &TelemetryResourceSegmentRuntime{rs: rs, ttl: rs.ttl, startTime: time.Now()})
+	}
+}
+
+func (tel *Telemetry) ReportDownloadSettled(dwn *Downloader, rs *ResourceSegment) {
+	tel.downloaderSegmentMapMutex.Lock()
+	defer tel.downloaderSegmentMapMutex.Unlock()
+
+	arr := tel.downloaderSegmentMap[dwn]
+	for _, runtime := range arr {
+		if runtime.rs == rs {
+			// dereference and copy
+			runtime.rs = &ResourceSegment{
+				resource: rs.resource,
+				from:     rs.from,
+				to:       rs.to,
+				ack:      rs.ack,
+				ttl:      rs.ttl,
+				status:   rs.status}
+			runtime.settledTime = time.Now()
+			break
+		}
+	}
 }
 
 func (tel *Telemetry) PrintResourceProgress(r *Resource, usableWidth uint) {
@@ -202,33 +238,6 @@ func (tel *Telemetry) PrintResourceProgress(r *Resource, usableWidth uint) {
 
 	for _, rs := range rss {
 		tel.PrintResourceSegmentProgress(rs, &color, uint(resourceBarWidth))
-	}
-}
-
-func (tel *Telemetry) ReportDownloadingSegment(dwn *Downloader, rs *ResourceSegment) {
-	tel.downloaderSegmentMapMutex.Lock()
-	defer tel.downloaderSegmentMapMutex.Unlock()
-
-	for _, arr := range tel.downloaderSegmentMap {
-		for _, runtime := range arr {
-			if runtime.rs == rs {
-				// copy
-				runtime.rs = &ResourceSegment{
-					resource: rs.resource,
-					from:     rs.from,
-					to:       rs.to,
-					ack:      rs.ack,
-					ttl:      rs.ttl,
-					status:   rs.status}
-				break
-			}
-		}
-	}
-
-	if tel.downloaderSegmentMap[dwn] == nil {
-		tel.downloaderSegmentMap[dwn] = []*TelemetryResourceSegmentRuntime{{rs: rs, ttl: rs.ttl}}
-	} else {
-		tel.downloaderSegmentMap[dwn] = append(tel.downloaderSegmentMap[dwn], &TelemetryResourceSegmentRuntime{rs: rs, ttl: rs.ttl})
 	}
 }
 
@@ -272,4 +281,12 @@ func (tel *Telemetry) PrintResourceSegmentProgress(rs *ResourceSegment, color *T
 		tm.Print(tm.BackgroundRGB(strings.Repeat(" ", filledWidth), color.fr, color.fg, color.fb))
 		tm.Print(tm.BackgroundRGB(strings.Repeat(" ", unfilledWidth), color.br, color.bg, color.bb))
 	}
+}
+
+func SignedInt[T ~int | ~int8 | ~int16 | ~int32 | ~int64 |
+	~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64](n T) string {
+	if n < 0 {
+		return strconv.Itoa(int(n))
+	}
+	return "+" + strconv.Itoa(int(n))
 }

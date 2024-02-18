@@ -110,6 +110,7 @@ func (dwn *Downloader) FetchResourceRequest(userRequest UserRequest) ResourceReq
 
 func (dwn *Downloader) Download(seg *ResourceSegment) DownloadResult {
 	telemetry.ReportDownloadingSegment(dwn, seg)
+	defer telemetry.ReportDownloadSettled(dwn, seg)
 
 	seg.StartDownload()
 
@@ -222,7 +223,7 @@ func (dc *DownloaderCluster) Download(segments []*ResourceSegment) {
 		} else {
 			for waitingSplitSegList.Len() != 0 {
 				firstHalf := waitingSplitSegList.Pop()
-				if !firstHalf.IsSettled() && firstHalf.to-firstHalf.ack > 1024 { // TODO configurable 1KB
+				if !firstHalf.IsSettled() && firstHalf.to-firstHalf.ack > 1024*10 { // TODO configurable 1KB
 					secondHalf := firstHalf.Split()
 					log.Println("Split first from:", firstHalf.from, "to:", firstHalf.to, "; second from:", secondHalf.from, "to:", secondHalf.to) // TODO telemetry
 					segments = append(segments, secondHalf)
