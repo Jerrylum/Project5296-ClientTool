@@ -191,15 +191,15 @@ func (dc *DownloaderCluster) FetchResourceRequests(userRequests []UserRequest) R
 	return resourceRequests
 }
 
-func (dc *DownloaderCluster) Download(segments []*ResourceSegment) {
+func (dc *DownloaderCluster) Download(segments *[]*ResourceSegment) {
 	waitingSplitSegList := ThreadSafeSortedList[ResourceSegment]{
 		list: []*ResourceSegment{},
 		less: func(i, j *ResourceSegment) bool {
 			return i.ContentLength() > j.ContentLength()
 		}}
 
-	pendingSegQueue := make(chan *ResourceSegment, len(segments))
-	for _, seg := range segments {
+	pendingSegQueue := make(chan *ResourceSegment, len(*segments))
+	for _, seg := range *segments {
 		putSeg := seg
 		pendingSegQueue <- putSeg
 	}
@@ -213,7 +213,7 @@ func (dc *DownloaderCluster) Download(segments []*ResourceSegment) {
 		dwn := <-downloaderQueue
 
 		// break if all segments are downloaded or failed
-		if IsAllSegmentsSettled(segments) {
+		if IsAllSegmentsSettled(*segments) {
 			break
 		}
 
@@ -223,10 +223,10 @@ func (dc *DownloaderCluster) Download(segments []*ResourceSegment) {
 		} else {
 			for waitingSplitSegList.Len() != 0 {
 				firstHalf := waitingSplitSegList.Pop()
-				if !firstHalf.IsSettled() && firstHalf.to-firstHalf.ack > 1024*10 { // TODO configurable 1KB
+				if !firstHalf.IsSettled() && int64(firstHalf.to)-int64(firstHalf.ack) > 1024*10 { // TODO configurable 1KB
 					secondHalf := firstHalf.Split()
 					log.Println("Split first from:", firstHalf.from, "to:", firstHalf.to, "; second from:", secondHalf.from, "to:", secondHalf.to) // TODO telemetry
-					segments = append(segments, secondHalf)
+					*segments = append(*segments, secondHalf)
 					telemetry.ReportNewSegmentAdded(secondHalf)
 					seg = secondHalf
 					break

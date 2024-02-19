@@ -221,6 +221,8 @@ func (tel *Telemetry) PrintReport() {
 		fmt.Println()
 	}
 	fmt.Println()
+	fmt.Printf("Total number of segments: %d\n", len(*tel.segments))
+	fmt.Println()
 }
 
 func (tel *Telemetry) ReportNewSegmentAdded(rs *ResourceSegment) {

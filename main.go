@@ -174,7 +174,7 @@ Each line can be one of the following formats:
 
 	telemetry.Start(&downloaders, &resourceRequests, &resources, &segments)
 
-	downloaders.Download(segments)
+	downloaders.Download(&segments)
 
 	telemetry.Update()
 
