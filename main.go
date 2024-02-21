@@ -51,6 +51,8 @@ Each line can be one of the following formats:
 `)
 	numOfConnRaw := flag.Int("connections", 0, "The number of connections in total to download")
 	logFilePathRaw := flag.String("log", "", "The path to the log file. If not provided, the log will be discarded.")
+	name := flag.String("name", "default", "The name of the current execution. If not provided, the name will be 'default'")
+	timeLogFilePathRaw := flag.String("timeLog", "", "The path to the time log file. If not provided, the log will be discarded.")
 
 	flag.Parse()
 
@@ -139,7 +141,7 @@ Each line can be one of the following formats:
 	/// Init telemetry and start download process
 	/////////////////////////
 
-	telemetry.Init(*logFilePathRaw)
+	telemetry.Init(*logFilePathRaw, *name, *timeLogFilePathRaw)
 
 	/////////////////////////
 	/// Calculate the chunk size for each downloader
@@ -176,7 +178,7 @@ Each line can be one of the following formats:
 
 	downloaders.Download(&segments)
 
-	telemetry.Update()
+	telemetry.End()
 
 	/////////////////////////
 	/// Print the report

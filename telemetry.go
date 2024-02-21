@@ -29,6 +29,8 @@ type TelemetryResourceSegmentRuntime struct {
 }
 
 type Telemetry struct {
+	name                      string // Used in the time log file
+	timeLogFile               *os.File
 	downloaders               *DownloaderCluster
 	requests                  *ResourceRequestList
 	resources                 *[]*Resource
@@ -42,11 +44,14 @@ type Telemetry struct {
 	downloaderSegmentMap      map[*Downloader][]*TelemetryResourceSegmentRuntime
 	totalContentLength        uint64
 	chunkSize                 uint64
+	isStarted                 bool
+	startTime                 time.Time
+	endTime                   time.Time
 }
 
 var telemetry Telemetry
 
-func (tel *Telemetry) Init(logFilePathRaw string) {
+func (tel *Telemetry) Init(logFilePathRaw string, name string, timeLogFilePathRaw string) {
 	if logFilePathRaw == "" {
 		log.SetOutput(io.Discard)
 	} else {
@@ -58,6 +63,26 @@ func (tel *Telemetry) Init(logFilePathRaw string) {
 		// defer f.Close()
 
 		log.SetOutput(f)
+	}
+
+	tel.name = name
+
+	if timeLogFilePathRaw != "" {
+		os.MkdirAll(filepath.Dir(timeLogFilePathRaw), os.ModePerm)
+		f, err := os.OpenFile(timeLogFilePathRaw, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+		if err != nil {
+			log.Fatalf("error opening file: %v", err)
+		}
+		// defer f.Close()
+
+		tel.timeLogFile = f
+	} else {
+		f, err := os.OpenFile("/dev/null", os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+		if err != nil {
+			log.Fatalf("error opening file: %v", err)
+		}
+
+		tel.timeLogFile = f
 	}
 
 	tm.Clear()
@@ -103,12 +128,27 @@ func (tel *Telemetry) Start(
 		tel.resourceSegmentCountMap[rs.resource]++
 	}
 
+	tel.isStarted = true
+
 	go func() {
-		for {
+		for tel.isStarted {
 			tel.Update()
 			time.Sleep(50 * time.Millisecond)
 		}
 	}()
+
+	tel.startTime = time.Now()
+}
+
+func (tel *Telemetry) End() {
+	tel.isStarted = false
+	tel.endTime = time.Now()
+
+	if tel.timeLogFile != nil {
+		time := float64(tel.endTime.Sub(tel.startTime).Milliseconds()) / 1000.0
+		timeStr := strconv.FormatFloat(time, 'f', -1, 64)
+		tel.timeLogFile.WriteString(fmt.Sprintf("%s, %s\n", tel.name, timeStr))
+	}
 }
 
 func (tel *Telemetry) Update() {
