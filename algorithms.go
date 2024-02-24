@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"sync"
 )
 
@@ -29,7 +28,6 @@ func ConsumeJobs[T any](workers []*T, jobs []func(worker *T)) {
 			(*<-jobsQueue)(worker)
 			consumed++
 			workerQueue <- worker
-			fmt.Println("Consumed", consumed)
 		}(<-workerQueue)
 	}
 
