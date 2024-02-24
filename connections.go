@@ -25,6 +25,7 @@ type ResourceRequest struct {
 	contentLength uint64 // in bytes
 	isAcceptRange bool
 	status        ResourceRequestStatus
+	fetchedBy     *Downloader
 }
 
 type ResourceRequestStatus int
@@ -76,7 +77,8 @@ func (dwn *Downloader) FetchResourceRequest(userRequest UserRequest) ResourceReq
 				dest:          userRequest.dest,
 				status:        CONNECTION_TIMEOUT,
 				contentLength: 0,
-				isAcceptRange: false}
+				isAcceptRange: false,
+				fetchedBy:     dwn}
 		}
 		if strings.HasSuffix(errReason, "connect: connection refused") {
 			return ResourceRequest{
@@ -84,7 +86,8 @@ func (dwn *Downloader) FetchResourceRequest(userRequest UserRequest) ResourceReq
 				dest:          userRequest.dest,
 				status:        CONNECTION_REFUSED,
 				contentLength: 0,
-				isAcceptRange: false}
+				isAcceptRange: false,
+				fetchedBy:     dwn}
 		}
 		panic(err)
 	}
@@ -97,14 +100,16 @@ func (dwn *Downloader) FetchResourceRequest(userRequest UserRequest) ResourceReq
 			dest:          userRequest.dest,
 			status:        AVAILABLE,
 			contentLength: uint64(resp.ContentLength), // XXX: validate the data
-			isAcceptRange: resp.Header.Get("Accept-Ranges") == "bytes"}
+			isAcceptRange: resp.Header.Get("Accept-Ranges") == "bytes",
+			fetchedBy:     dwn}
 	} else {
 		return ResourceRequest{
 			url:           userRequest.url,
 			dest:          userRequest.dest,
 			status:        NOT_FOUND,
 			contentLength: 0,
-			isAcceptRange: false}
+			isAcceptRange: false,
+			fetchedBy:     dwn}
 	}
 }
 
@@ -181,7 +186,6 @@ func (dc *DownloaderCluster) FetchResourceRequests(userRequests []UserRequest) R
 		handleI := i
 		handleRequest := request
 		jobs[i] = func(downloader *Downloader) {
-			// fmt.Println("Downloading", handleUrl, handleI)
 			resourceRequests[handleI] = downloader.FetchResourceRequest(handleRequest)
 		}
 	}
@@ -375,5 +379,9 @@ func ConstructDownloaderFromIp(ip string) *Downloader {
 	client := &DownloaderClientImpl{}
 	client.Transport = transport
 
-	return &Downloader{client: client}
+	dwn := &Downloader{client: client}
+
+	telemetry.ReportNewDownloaderAdded(dwn, ip)
+
+	return dwn
 }

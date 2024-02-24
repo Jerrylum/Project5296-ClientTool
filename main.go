@@ -109,11 +109,11 @@ Each line can be one of the following formats:
 			} else {
 				switch rr.status {
 				case NOT_FOUND:
-					fmt.Printf("Status code != 200: %s\n", rr.url)
+					fmt.Printf("Status code != 200: %s, fetched by proxy %s\n", rr.url, telemetry.GetDownloaderIp(rr.fetchedBy))
 				case CONNECTION_TIMEOUT:
-					fmt.Printf("Connection timeout: %s\n", rr.url)
+					fmt.Printf("Connection timeout: %s, fetched by proxy %s\n", rr.url, telemetry.GetDownloaderIp(rr.fetchedBy))
 				case CONNECTION_REFUSED:
-					fmt.Printf("Connection refused: %s\n", rr.url)
+					fmt.Printf("Connection refused: %s, fetched by proxy %s\n", rr.url, telemetry.GetDownloaderIp(rr.fetchedBy))
 				}
 			}
 		}

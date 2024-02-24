@@ -1,6 +1,12 @@
 package main
 
+import (
+	"fmt"
+	"sync"
+)
+
 func ConsumeJobs[T any](workers []*T, jobs []func(worker *T)) {
+	wg := &sync.WaitGroup{}
 	consumed := 0
 
 	workerQueue := make(chan *T, len(workers))
@@ -17,15 +23,15 @@ func ConsumeJobs[T any](workers []*T, jobs []func(worker *T)) {
 
 	// assoicate a worker with a job
 	for i := 0; i < len(jobs); i++ {
+		wg.Add(1)
 		go func(worker *T) {
+			defer wg.Done()
 			(*<-jobsQueue)(worker)
 			consumed++
 			workerQueue <- worker
+			fmt.Println("Consumed", consumed)
 		}(<-workerQueue)
 	}
 
-	// wait for all jobs to be consumed
-	for consumed < len(jobs) {
-		<-workerQueue
-	}
+	wg.Wait()
 }

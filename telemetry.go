@@ -42,6 +42,7 @@ type Telemetry struct {
 	resourceSegmentCountMap   map[*Resource]uint
 	downloaderSegmentMapMutex *sync.Mutex
 	downloaderSegmentMap      map[*Downloader][]*TelemetryResourceSegmentRuntime
+	downloaderIpMap           map[*Downloader]string
 	totalContentLength        uint64
 	chunkSize                 uint64
 	isStarted                 bool
@@ -49,7 +50,9 @@ type Telemetry struct {
 	endTime                   time.Time
 }
 
-var telemetry Telemetry
+var telemetry Telemetry = Telemetry{
+	downloaderIpMap: make(map[*Downloader]string),
+}
 
 func (tel *Telemetry) Init(logFilePathRaw string, name string, timeLogFilePathRaw string) {
 	if logFilePathRaw == "" {
@@ -263,6 +266,15 @@ func (tel *Telemetry) PrintReport() {
 	fmt.Println()
 	fmt.Printf("Total number of segments: %d\n", len(*tel.segments))
 	fmt.Println()
+}
+
+func (tel *Telemetry) ReportNewDownloaderAdded(dwn *Downloader, ip string) {
+	tel.downloaderIpMap[dwn] = ip
+	tel.downloaderSegmentMap[dwn] = []*TelemetryResourceSegmentRuntime{}
+}
+
+func (tel *Telemetry) GetDownloaderIp(dwn *Downloader) string {
+	return tel.downloaderIpMap[dwn]
 }
 
 func (tel *Telemetry) ReportNewSegmentAdded(rs *ResourceSegment) {
