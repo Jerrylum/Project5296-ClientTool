@@ -270,7 +270,6 @@ func (tel *Telemetry) PrintReport() {
 
 func (tel *Telemetry) ReportNewDownloaderAdded(dwn *Downloader, ip string) {
 	tel.downloaderIpMap[dwn] = ip
-	tel.downloaderSegmentMap[dwn] = []*TelemetryResourceSegmentRuntime{}
 }
 
 func (tel *Telemetry) GetDownloaderIp(dwn *Downloader) string {
