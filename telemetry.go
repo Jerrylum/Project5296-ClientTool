@@ -341,9 +341,12 @@ func (tel *Telemetry) PrintResourceSegmentProgress(rs *ResourceSegment, color *T
 
 	if barWidth > len(idStr) {
 		if filledWidth != 0 {
-			filledPart := fmt.Sprintf("%-"+strconv.Itoa(filledWidth)+"s", idStr)
+			idStrPart1 := idStr
+			if filledWidth < len(idStr) {
+				idStrPart1 = idStr[:filledWidth]
+			}
+			filledPart := fmt.Sprintf("%-"+strconv.Itoa(filledWidth)+"s", idStrPart1)
 			tm.Print(tm.BackgroundRGB(filledPart, color.fr, color.fg, color.fb))
-
 		}
 		if unfilledWidth != 0 {
 			idStrPart2 := ""
