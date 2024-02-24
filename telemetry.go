@@ -340,22 +340,19 @@ func (tel *Telemetry) PrintResourceSegmentProgress(rs *ResourceSegment, color *T
 	unfilledWidth := max(barWidth-filledWidth, 0)
 
 	if barWidth > len(idStr) {
-		if filledWidth != 0 {
-			idStrPart1 := idStr
-			if filledWidth < len(idStr) {
-				idStrPart1 = idStr[:filledWidth]
-			}
-			filledPart := fmt.Sprintf("%-"+strconv.Itoa(filledWidth)+"s", idStrPart1)
-			tm.Print(tm.BackgroundRGB(filledPart, color.fr, color.fg, color.fb))
+		idStrPart1 := idStr
+		if filledWidth < len(idStr) {
+			idStrPart1 = idStr[:filledWidth]
 		}
-		if unfilledWidth != 0 {
-			idStrPart2 := ""
-			if filledWidth < len(idStr) {
-				idStrPart2 = idStr[filledWidth:]
-			}
-			unfilledPart := fmt.Sprintf("%-"+strconv.Itoa(unfilledWidth)+"s", idStrPart2)
-			tm.Print(tm.BackgroundRGB(unfilledPart, color.br, color.bg, color.bb))
+		filledPart := fmt.Sprintf("%-"+strconv.Itoa(filledWidth)+"s", idStrPart1)
+		tm.Print(tm.BackgroundRGB(filledPart, color.fr, color.fg, color.fb))
+
+		idStrPart2 := ""
+		if filledWidth < len(idStr) {
+			idStrPart2 = idStr[filledWidth:]
 		}
+		unfilledPart := fmt.Sprintf("%-"+strconv.Itoa(unfilledWidth)+"s", idStrPart2)
+		tm.Print(tm.BackgroundRGB(unfilledPart, color.br, color.bg, color.bb))
 	} else {
 		tm.Print(tm.BackgroundRGB(strings.Repeat(" ", filledWidth), color.fr, color.fg, color.fb))
 		tm.Print(tm.BackgroundRGB(strings.Repeat(" ", unfilledWidth), color.br, color.bg, color.bb))
